@@ -1,7 +1,7 @@
 require 'fileutils'
 
 
-DISABLE_JSLINT = ENV['DISABLE_JSLINT'] == 'true'
+ENABLE_JSLINT = ENV['ENABLE_JSLINT'] == 'false'
 
 task :default => [:debug,:build]
 
@@ -34,7 +34,7 @@ end
 
 desc "Run jslint on all JavaScript files used by this app, can be disabled by setting DISABLE_JSLINT=true."
 task :jslint do |t|
-  unless DISABLE_JSLINT
+  if ENABLE_JSLINT
     Dir.chdir(Rake.original_dir)
 
     config = get_config_from_file
