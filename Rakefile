@@ -7,7 +7,7 @@ task :default => [:debug,:build]
 
 desc "Create an app with the provided name (and optional SDK version)"
 task :new, :app_name, :sdk_version do |t, args|
-  args.with_defaults(:sdk_version => "2.0p")
+  args.with_defaults(:sdk_version => "2.0p2")
   Dir.chdir(Rake.original_dir)
 
   config = Rally::AppSdk::AppConfig.new(args.app_name, args.sdk_version)
