@@ -1,7 +1,7 @@
 require 'fileutils'
 
 
-ENABLE_JSLINT = ENV['ENABLE_JSLINT'] == 'false'
+ENABLE_JSLINT = ENV['ENABLE_JSLINT'] == 'true'
 
 task :default => [:debug, :build]
 
