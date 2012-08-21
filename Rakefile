@@ -183,7 +183,6 @@ module Rally
 
       private
 
-
       # Login to Rally and obtain session id
       # Developer note: After posting login creds, Rally immediately issues a 302 redirect
       def login
@@ -262,13 +261,11 @@ module Rally
       def create_empty_panel
 
           # Lookup panel meta
-          request_path = "/slm/panel/getCatalogPanels.sp"
+          path = "/slm/panel/getCatalogPanels.sp"
           params = {:cpoid => @project_oid,
                     :_slug => "/custom/#{@page_oid}",
                     :ignorePanelDefOids => ''}  # empty ignorePanelDefOids apparently is required
-          path = construct_get(request_path, params)
-
-          response = rally_get(path)
+          response = rally_get(path, params)
 
           panels = JSON.parse(response.body)
           custom_html_panel_oid = nil
@@ -313,13 +310,12 @@ module Rally
 
       # Set layout of page
       def set_page_layout
-          request_path = "/slm/dashboardSwitchLayout.sp"
+          path = "/slm/dashboardSwitchLayout.sp"
           params = {:cpoid => @project_oid,
                     :layout => "SINGLE",
                     :dashboardName => "#{@tab_name}#{@page_oid}",
                     :_slug => "/custom/#{@page_oid}",}
-          path = construct_get(request_path, params)
-          response = rally_get(path)
+          response = rally_get(path, params)
       end
 
       # Determine project reference (oid) either using a given oid or looking up a given project name (in config).
@@ -339,11 +335,10 @@ module Rally
             end
 
             # lookup oid for given name
-            request_path = "/slm/webservice/1.36/project.js"
+            path = "/slm/webservice/1.36/project.js"
             params = {"query" => "(Name%20%3D%20%22#{URI.encode(@project)}%22)",
                       "fetch" => "ObjectID"}
-            path = construct_get(request_path, params)
-            response = rally_get(path)
+            response = rally_get(path, params)
             results = JSON.parse(response.body)
             result_count = results["QueryResult"]["TotalResultCount"].to_i
 
@@ -373,10 +368,9 @@ module Rally
 
           # oid given, lookup name
           else
-            request_path = "slm/webservice/1.36/project/#{@project_oid}.js"
+            path = "slm/webservice/1.36/project/#{@project_oid}.js"
             params = {"fetch" => "Name"}
-            path = construct_get(request_path, params)
-            response = rally_get(path)
+            response = rally_get(path, params)
             results = JSON.parse(response.body)
             @project = results["Project"]["Name"]
           end
@@ -389,8 +383,13 @@ module Rally
       end
 
       # Perform HTTP GET to Rally with given uri path
-      def rally_get(path)
-        path = "/#{path}" if path[0] != '/'    # ensure prepended slash
+      def rally_get(path, params = {})
+
+        # format get params on end of path
+        path = construct_get(path, params) if !params.empty?
+        # ensure prepended slash
+        path = "/#{path}" if path[0] != '/'
+
         uri = URI.parse(@server + ":" + @port + path)
         http = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl = true
