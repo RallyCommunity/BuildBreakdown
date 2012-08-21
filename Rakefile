@@ -102,8 +102,8 @@ module Rally
     # Manual Testing: The following shell curl statements, developed as a prelude to this Class,
     #                 provide an alternate example for (manual) testing.  The uri's, schemes, and
     #                 params in this class were taken directly from the curl statements.  Note that
-    #                 cookies.txt file used to pass around the session info
-    # 
+    #                 cookies.txt file used to pass around the session info.
+    #
     #         LOGIN
     #          curl --location --cookie-jar cookies.txt --data-urlencode "j_username=<user>" --data-urlencode "j_password=<passwd>"
     #               https://demo01.rallydev.com/slm/platform/j_platform_security_check.op
@@ -135,7 +135,8 @@ module Rally
         @username = config.username
         @password =config.password
         @project_oid = config.project_oid     # id of project to deploy app to
-        @page_oid = config.page_oid           # id of page, associated to project, to deploy app to
+        @page_oid = config.page_oid           # id of existing page for updates
+        @panel_oid = config.panel_oid         # id of existing panel, on page, for updates
         @tab_name = 'myhome'                  # internal name for 'My Home' application tab
         @app_name = config.name               # user provided name for their app
         @app_filename = app_filename          # locally built app
@@ -172,12 +173,12 @@ module Rally
       def create_page
         # new page with no panels
         @page_oid = create_blank_page
-        # cache page oid for subsequent deploys
-        @config.add_persistent_property("pageOid", @page_oid)
+        @config.add_persistent_property("pageOid", @page_oid) # cache page oid for subsequent deploys
         # set 'single' layout
         set_page_layout
         # container on page for app code
         @panel_oid = create_empty_panel
+        @config.add_persistent_property("panelOid", @panel_oid)  # cache panel oid for subsequent deploys
         puts "> Created page '#{@app_name}'"
         upload_app_into_panel
         puts "> Uploaded app"
@@ -279,7 +280,6 @@ module Rally
                        "dashboardName" => "#{@tab_name}#{@page_oid}",
                        "settings" => JSON.generate(panel_settings)}
           response = rally_post(path, form_data)
-          puts response.inspect
       end
 
       # Set layout of page
@@ -309,7 +309,7 @@ module Rally
       def rally_post(path, form_data, login = false)
         path = "/#{path}" if path[0] != '/'    # ensure prepended slash
         uri = URI.parse(@server + ":" + @port + path)
-puts uri
+
         http = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl = true
         http.verify_mode = OpenSSL::SSL::VERIFY_NONE
@@ -317,8 +317,6 @@ puts uri
         headers = {'Referer' => '#{server}', 'Cookie' => @session_cookie} unless login   # don't even have cookies until -after- login :)
         request = Net::HTTP::Post.new(uri.request_uri, headers)
         request.set_form_data(form_data)
-puts request.inspect
-puts form_data.inspect
         response = http.request(request)
         return response
       end
@@ -475,7 +473,7 @@ puts form_data.inspect
 
       attr_reader :name, :sdk_version
       attr_accessor :javascript, :css, :class_name
-      attr_accessor :server, :username, :password, :project_oid, :page_oid
+      attr_accessor :server, :username, :password, :project_oid, :page_oid, :panel_oid
 
       def self.from_config_file(config_file)
         unless File.exist? config_file
@@ -492,6 +490,7 @@ puts form_data.inspect
         password = Rally::RallyJson.get(config_file, "password")
         project_oid = Rally::RallyJson.get(config_file, "projectOid")
         page_oid = Rally::RallyJson.get(config_file, "pageOid")
+        panel_oid = Rally::RallyJson.get(config_file, "panelOid")
 
         config = Rally::AppSdk::AppConfig.new(name, sdk_version, config_file)
         config.javascript = javascript
@@ -502,6 +501,7 @@ puts form_data.inspect
         config.password = password
         config.project_oid = project_oid
         config.page_oid = page_oid
+        config.panel_oid = panel_oid
         config
       end
 
