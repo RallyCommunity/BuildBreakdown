@@ -44,14 +44,14 @@ task :deploy => [:build] do
   config = get_config_from_file
   deploy_filename = Rally::AppSdk::AppTemplateBuilder::HTML
 
-  deployer = Rally::AppSdk::Deployr.new(config, deploy_filename)
+  deployr = Rally::AppSdk::Deployr.new(config, deploy_filename)
 
-  deployer.login              # obtain session info
+  deployr.login              # obtain session info
 
-  if deployer.page_exists?
-    deployer.update_page
+  if deployr.page_exists?
+    deployr.update_page
   else
-    deployer.create_page
+    deployr.create_page
   end
 
 end
