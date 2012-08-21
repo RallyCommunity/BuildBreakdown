@@ -47,7 +47,6 @@ namespace "deploy" do
   task :app => [:build] do
     config = get_config_from_file
     app_filename = Rally::AppSdk::AppTemplateBuilder::HTML
-    puts "Deploying to Rally..."
     deployr = Rally::AppSdk::Deployr.new(config, app_filename)
     deployr.deploy
   end
@@ -56,7 +55,6 @@ namespace "deploy" do
   task :debug => ["rake:debug"] do
     config = get_config_from_file
     app_filename = Rally::AppSdk::AppTemplateBuilder::HTML_DEBUG
-    puts "Deploying to Rally..."
     deployr = Rally::AppSdk::Deployr.new(config, app_filename)
     deployr.deploy
   end
@@ -84,11 +82,6 @@ end
 module Rally
   module AppSdk
 
-    # project name in config
-    # error handling
-    #  - project not found
-    #  - server unavail
-
     # Name: Deployr
     # Description: Class responsible for deploying Your app to a Rally server.
     #              Already deployed? Your page will just be updated with new app source.
@@ -112,8 +105,8 @@ module Rally
     #          "password": "S3cr3tS4uce"                # rally login password
     #          "project": "Some Project"                # unique name of the project to deploy to
     #          "projectOid": "123"                      # [optional] id of the project to deploy new page
-    #          "pageOidCached": "456"                   # !internal! cached page reference generated on 1st deploy
-    #          "panelOidCached": "789"                  # !internal! cached panel reference generated on 1st deploy
+    #          "pageOid.cached": "456"                   # !internal! cached page reference generated on 1st deploy
+    #          "panelOid.cached": "789"                  # !internal! cached panel reference generated on 1st deploy
     #         }
     #
     # Workflow:
@@ -156,21 +149,34 @@ module Rally
         @username = config.username
         @password =config.password
         @project_oid = config.project_oid     # id of project to deploy app to
+        @project = config.project             # [optional] name of project to deploy app to
         @page_oid = config.page_oid           # id of existing page for updates
         @panel_oid = config.panel_oid         # id of existing panel, on page, for updates
-        @tab_name = 'myhome'                  # internal name for 'My Home' application tab
+        @tab_name = 'myhome'                  # internal name for 'My Home' application tab (used in http requests)
+        @tab_display_name = 'MyHome'          # display name 'My Home' application tab
         @app_name = config.name               # user provided name for their app
         @app_filename = app_filename          # locally built app
         @session_cookie = nil                 # required during all server communication; defined after login
       end
 
       def deploy
+
+        puts "Deploying to Rally..."
+
         login  # obtains session info
+
+        resolve_project  # determine if using oid or name from config
+
+        puts "* Server:   #{@server}"
+        puts "* Username: #{@username}"
+        puts "* Project:  #{@project}"
+
         if page_exists?
           update_page
         else
           create_page
         end
+
       end
 
       private
@@ -203,18 +209,19 @@ module Rally
       end
 
       def create_page
+
         # new page with no panels
         @page_oid = create_blank_page
-        @config.add_persistent_property("pageOidCached", @page_oid) # cache page oid for subsequent deploys
+        @config.add_persistent_property("pageOid.cached", @page_oid) # cache page oid for subsequent deploys
 
         # set 'single' layout
         set_page_layout
 
         # container on page for app code
         @panel_oid = create_empty_panel
-        @config.add_persistent_property("panelOidCached", @panel_oid)  # cache panel oid for subsequent deploys
+        @config.add_persistent_property("panelOid.cached", @panel_oid)  # cache panel oid for subsequent deploys
 
-        puts "> Created '#{@app_name}'page"
+        puts "> Created '#{@tab_display_name} > #{@app_name}'page"
         upload_app_into_panel
         puts "> Uploaded code to '#{@app_name}' page"
         puts "> Ready to Test! #{@server}/#/#{@project_oid}/custom/#{@page_oid}"
@@ -226,6 +233,7 @@ module Rally
       def login
         form_data = {"j_username" => @username, "j_password" => @password}
         response = rally_post("/slm/platform/j_platform_security_check.op", form_data, true)
+
         # essential for subsequent calls to rally to authenticate internally
         @session_cookie = get_session_cookie(response)
       end
@@ -326,6 +334,68 @@ module Rally
           response = rally_get(path)
       end
 
+      # Determine project reference (oid) either using a given oid or looking up a given project name (in config).
+      # This takes into consideration error handling for finding > 1 project with the same name.  Lets
+      # just assume that 80% of the time, project names are unique and it's handy to set in the config file.
+      # All others with conflicting names will just have to manually lookup the project oid and set in config file.
+      def resolve_project 
+
+          # oid not given; lookup by name
+          if @project_oid.nil? || @project_oid.empty?
+
+            # no project settings (oid or name) found - error
+            if @project.nil? || @project.empty?
+              puts "** Error: No project oid or name found in config file."
+              puts "Exiting..."
+              exit 1
+            end
+
+            # lookup oid for given name
+            request_path = "/slm/webservice/1.36/project.js"
+            params = {"query" => "(Name%20%3D%20%22#{URI.encode(@project)}%22)",
+                      "fetch" => "ObjectID"}
+            path = construct_get(request_path, params)
+            response = rally_get(path)
+            results = JSON.parse(response.body)
+            result_count = results["QueryResult"]["TotalResultCount"].to_i
+
+           if result_count > 1
+             puts "** Error: Multiple projects named '#{@project}' found in Rally.  Set project_oid in config file."
+             puts "Exiting..."
+             exit 1
+           end
+
+            # grab project oid from single result in lookup
+            project_oid = results["QueryResult"]["Results"][0]["ObjectID"]
+
+            # verify parsed project oid is all digits
+            if project_oid.to_s !~ /\d+/ then
+              puts "** Internal Error: Unable to parse project oid from name lookup."
+              puts "** Debugging: There should be project info (e.g. 'ObjectID') in the results."
+              puts results["QueryResult"]["Results"]
+              puts "Exiting..."
+              exit 1
+            end
+
+            @project_oid = project_oid
+
+          # oid given, lookup name
+          else
+            request_path = "slm/webservice/1.36/project/#{@project_oid}.js"
+            params = {"fetch" => "Name"}
+            path = construct_get(request_path, params)
+            response = rally_get(path)
+            results = JSON.parse(response.body)
+            @project = results["Project"]["Name"]
+          end
+      end
+
+      # Utility to concatenate the GET request params after the given request path
+      # Given params={:foo => "bar", "baz" => "quux"} generate 'path?foo=bar?baz=quux'
+      def construct_get(path, params)
+          path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
+      end
+
       # Perform HTTP GET to Rally with given uri path
       def rally_get(path)
         path = "/#{path}" if path[0] != '/'    # ensure prepended slash
@@ -333,7 +403,14 @@ module Rally
         http = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl = true
         http.verify_mode = OpenSSL::SSL::VERIFY_NONE
-        request = Net::HTTP::Get.new(uri.request_uri, {'Cookie' => "#{@session_cookie}"})
+        begin
+          request = Net::HTTP::Get.new(uri.request_uri, {'Cookie' => "#{@session_cookie}"})
+        rescue Exception => e
+          puts "** Error: Problem connecting to Rally server '#{@server}'."
+          puts "** Reason: #{e.message}"
+          puts "Exiting..."
+          exit 1
+        end
         response = http.request(request)
         return response
       end
@@ -350,14 +427,21 @@ module Rally
         headers = {'Cookie' => @session_cookie} unless login   # don't even have cookies until -after- login :)
         request = Net::HTTP::Post.new(uri.request_uri, headers)
         request.set_form_data(form_data)
-        response = http.request(request)
+        begin
+          response = http.request(request)
+          # if session is bad (usually credentials) rally commonly responds with 302
+          raise "Invalid session and/or credentials.  Check username/password in config file." if response.code == "302" && !login
+        rescue Exception => e
+          if login
+            puts "** Error: Unable to login to Rally server '#{@server}'."
+          else
+            puts "** Error: Problem connecting to Rally server '#{@server}'."
+          end
+          puts "** Reason: #{e.message}"
+          puts "Exiting..."
+          exit 1
+        end
         return response
-      end
-
-      # Utility to concatenate the GET request params after the given request path
-      # Given params={:foo => "bar", "baz" => "quux"} generate 'path?foo=bar?baz=quux'
-      def construct_get(path, params)
-          path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
       end
 
     end
@@ -506,7 +590,7 @@ module Rally
 
       attr_reader :name, :sdk_version
       attr_accessor :javascript, :css, :class_name
-      attr_accessor :server, :username, :password, :project_oid, :page_oid, :panel_oid
+      attr_accessor :server, :username, :password, :project, :project_oid, :page_oid, :panel_oid
 
       def self.from_config_file(config_file)
         unless File.exist? config_file
@@ -522,8 +606,9 @@ module Rally
         username = Rally::RallyJson.get(config_file, "username")
         password = Rally::RallyJson.get(config_file, "password")
         project_oid = Rally::RallyJson.get(config_file, "projectOid")
-        page_oid = Rally::RallyJson.get(config_file, "pageOidCached")
-        panel_oid = Rally::RallyJson.get(config_file, "panelOidCached")
+        project = Rally::RallyJson.get(config_file, "project")
+        page_oid = Rally::RallyJson.get(config_file, "pageOid.cached")
+        panel_oid = Rally::RallyJson.get(config_file, "panelOid.cached")
 
         config = Rally::AppSdk::AppConfig.new(name, sdk_version, config_file)
         config.javascript = javascript
@@ -533,6 +618,7 @@ module Rally
         config.username = username
         config.password = password
         config.project_oid = project_oid
+        config.project = project
         config.page_oid = page_oid
         config.panel_oid = panel_oid
         config
