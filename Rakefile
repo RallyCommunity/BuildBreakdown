@@ -41,7 +41,7 @@ end
 namespace "deploy" do
 
   desc "Deploy an app to a Rally server"
-  task :app => [:build] do
+  task :app => ["rake:build"] do
     config = get_config_from_file
     app_filename = Rally::AppSdk::AppTemplateBuilder::HTML
     deployr = Rally::AppSdk::Deployr.new(config, app_filename)
