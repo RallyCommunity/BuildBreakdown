@@ -100,16 +100,19 @@ module Rally
     #          "server": "http://rally1.rallydev.com"   # or another instance
     #          "username": "someone@domain.com"         # rally login name
     #          "password": "S3cr3tS4uce"                # rally login password
-    #          "project": "Some Project"                # unique name of the project to deploy to
-    #          "projectOid": "123"                      # [optional] id of the project to deploy new page
+    #          "project": "Some Project"                # [optional] conveninence to set project name to deploy to
+    #          "projectOid": "123"                      # id of the project to deploy new page (can omit if setting 'project')
     #          "pageOid.cached": "456"                   # !internal! cached page reference generated on 1st deploy
     #          "panelOid.cached": "789"                  # !internal! cached panel reference generated on 1st deploy
     #         }
     #
-    # Workflow:
+    # Workflow Overview:
     #
-    #          Login > Create Page > Set Layout > Find Panel Type > Add Empty Panel > Upload Content
-    #                              
+    #         New App:
+    #          Login > Create Page > [Set Cache] > Set Layout > Add Empty Panel > Upload Content
+    #         Existing App:
+    #          Login > [Get Cache] > Upload Content
+    #
     # Manual Testing: The following shell curl statements, developed as a prelude to this Class,
     #                 provide an alternate example for (manual) testing.  The uri's, schemes, and
     #                 params in this class were taken directly from the curl statements.  Note that
