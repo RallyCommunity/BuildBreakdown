@@ -44,9 +44,9 @@ task :deploy => [:build] do
   config = get_config_from_file
   deploy_filename = Rally::AppSdk::AppTemplateBuilder::HTML
 
-  deployer = Rally::AppSdk::Deployer.new(config, deploy_filename)
+  deployer = Rally::AppSdk::Deployr.new(config, deploy_filename)
 
-  deployer.login 
+  deployer.login              # obtain session info
 
   if deployer.page_exists?
     deployer.update_page
@@ -77,24 +77,31 @@ end
 module Rally
   module AppSdk
 
-    # refactor: http calls
     # get params
     # return response or body/code?
 
-    # Name: Deployer
-    # Description: Class responsible for deploying app source code to a rally server.
-    #              Expects connection & credential info to be located in config.json
+    # Name: Deployr
+    # Description: Class responsible for deploying Your app to a Rally server.  Already deployed? Your source
+    #              will just be updated.  Otherwise, a new page and panel, with single layout, will be created.
+    #              Note: Expects connection & credential info to be safely located (chmod 600) in config.json.
     # Config:
-    #         {
+    #         config.json
+    #         { 
     #          ...
     #          "server": "http://rally1.rallydev.com"         # or another instance
     #          "username": "someone@domain.com"               # rally login name
     #          "password": "S3cr3tS4uce"                      # rally login password
     #          "projectOid": 123456                           # project to deploy new page
+    #         }
     #
-    # Manual Testing: The following curl statements, developed as a prelude to this class,
+    # Workflow:
+    #
+    #          Login > Create Page > Set Layout > Find Panel Type > Add Empty Panel > Upload Content
+    #                              
+    # Manual Testing: The following shell curl statements, developed as a prelude to this Class,
     #                 provide an alternate example for (manual) testing.  The uri's, schemes, and
-    #                 params in this class were taken directly from the curl statements.
+    #                 params in this class were taken directly from the curl statements.  Note that
+    #                 cookies.txt file used to pass around the session info
     # 
     #         LOGIN
     #          curl --location --cookie-jar cookies.txt --data-urlencode "j_username=<user>" --data-urlencode "j_password=<passwd>"
@@ -103,6 +110,9 @@ module Rally
     #           curl --cookie cookies.txt
     #                --data "name=foopage&type=DASHBOARD&timeboxFilter=none&pid=myhome&editorMode=create&cpoid=699319&projectScopeUp=false&projectScopeDown=false&version=0"
     #                "https://demo01.rallydev.com/slm/wt/edit/create.sp"
+    #         SET PAGE LAYOUT (SINGLE)
+    #           curl --cookie cookies.txt
+    #             "https://demo01.rallydev.com/slm/dashboardSwitchLayout.sp?cpoid=699319&layout=SINGLE&dashboardName=myhome2246145&_slug=/custom/2246145"
     #         GET PANEL DEFINITION
     #           curl --cookie cookies.txt
     #                "https://demo01.rallydev.com/slm/panel/getCatalogPanels.sp?cpoid=&ignorePanelDefOids&gesture=getcatalogpaneldefs&slug=/custom/2246145"
@@ -114,24 +124,17 @@ module Rally
     #           curl --cookie cookies.txt
     #             --data "oid=2246150&dashboardName=myhome2246145&settings={'title':'my title','content':'my content'}"
     #             "https://demo01.rallydev.com/slm/dashboard/changepanelsettings.sp?cpoid=699319&_slug=/custom/2246145"
-    #         SET PAGE LAYOUT (SINGLE)
-    #           curl --cookie cookies.txt
-    #             "https://demo01.rallydev.com/slm/dashboardSwitchLayout.sp?cpoid=699319&layout=SINGLE&dashboardName=myhome2246145&_slug=/custom/2246145"
-    class Deployer
-
-      attr_accessor :server, :port
-      attr_accessor :username, :password
-      attr_accessor :project_oid
-      attr_accessor :dashboard_oid, :panel_oid
+    #
+    class Deployr
 
       def initialize(config, app_filename)
-        @config = config
+        @config = config                      # source of truth
         @server = config.server
-        @port = "443"  # SSL default
+        @port = "443"                         # SSL default port
         @username = config.username
         @password =config.password
-        @project_oid = config.project_oid
-        @dashboard_oid = config.dashboard_oid
+        @project_oid = config.project_oid     # id of project to deploy app to
+        @page_oid = config.page_oid           # id of page, associated to project, to deploy app to
         @tab_name = 'myhome'                  # internal name for 'My Home' application tab
         @app_name = config.name               # user provided name for their app
         @app_filename = app_filename          # locally built app
@@ -139,25 +142,23 @@ module Rally
       end
 
       # Determines if the app has already been uploaded to an existing page.
-      # When a page is created, the oid is saved in the config file.  This is then
-      # used in subsequent deploys as a 'cached' value to simply update the page.
+      # When a page is first deployed, the oid is saved in the config file.  This oid is
+      # then used in subsequent deploys as a 'cached' value to simply update the page.  Even with
+      # a cached value, we do a sanity check to verify the page _really_ exists.
       #
       # Developer Note:
-      #   * direct 'page' url format: https://demo01.rallydev.com/#/699319d/custom/2248290
+      #   * direct 'page' url format: https://demo01.rallydev.com/#/{project_oid}d/custom/{dashboard_oid}
+      #                               https://demo01.rallydev.com/#/699319d/custom/2248290
       def page_exists?
+        return false if @page_oid.nil?  # not cached
 
-        return false if @dashboard_oid.nil?     # no cached value
+        # no sleep for the wicked; verify page _still_ exists
+        response = rally_get("/#/#{@project_oid}d/custom/#{@page_oid}")
+        return true if response.class == Net::HTTPOK
 
-        response = rally_get("/#/#{@project_oid}d/custom/#{@dashboard_oid}")
-
-        case response
-        when Net::HTTPOK
-          return true
-        else
-          # TODO:  if dashboardOid is in prop file, but page DNE, then some cleanup is needed.
-          puts "Warning: A previous page no longer exists.  Will continue creating a new page..."
-          return false
-        end
+        # TODO:  if pageOid is in prop file, but page DNE, then some cleanup is needed; give users url to del? auto del?
+        puts "Warning: A previous page no longer exists.  Will continue creating a new page..."
+        return false
       end
 
       def update_page
@@ -165,45 +166,38 @@ module Rally
       end
 
       def create_page
-        puts "Creating New Page"
         create_blank_page
         set_page_layout
         create_empty_panel
-        puts "> Created dashboard '#{@app_name}'"
+        puts "> Created page '#{@app_name}'"
         upload_app_into_panel
-        puts "> Uploaded your App!"
+        puts "> Test Your App!"
       end
 
 
       # Login to Rally and obtain session id
-      #
+      # Developer note: After posting login creds, Rally immediately issues a 302 redirect
       def login
         form_data = {"j_username" => @username, "j_password" => @password}
         response = rally_post("/slm/platform/j_platform_security_check.op", form_data, true)
-
-        all_cookies = response.get_fields('set-cookie')
-        all_cookies.each { | cookie | @session_cookie = cookie if cookie =~ /JSESSIONID/ }
-
-        case response
-        when Net::HTTPRedirection then
-          redirect_uri = response['location']
-          uri = URI.parse(redirect_uri)
-          redirect_response = rally_get(uri.request_uri)
-
-          case redirect_response
-          when Net::HTTPOK then
-            puts "> Logged in to #{@server}"
-          else
-            puts "> error logging in.  Exiting"
-            exit 1
-          end
-        end
-
+        # essential for subsequent calls to rally to authenticate internally
+        @session_cookie = get_session_cookie(response)
       end
 
       private
 
-      # Create new dashboard page
+      # Extract Rally session cookie from response
+      def get_session_cookie(response)
+        response.get_fields('set-cookie').each do |cookie|
+          return cookie if cookie =~ /JSESSIONID/
+        end
+      end
+
+      # Create new page.
+      # Developer Note: After creating a page, the oid of the page is in the resulting html.
+      #                 We need this oid for future reference to the page.  Since html != xml,
+      #                 regex to the rexue.  While this is a lava pit in general, the match
+      #                 string needed is specific.   Also prevented gems e.g. nokogiri, etc.
       def create_blank_page
         form_data = {"name" => @app_name,
                      "type" => 'DASHBOARD',
@@ -214,23 +208,23 @@ module Rally
                      "version" => 0}
         response = rally_post("/slm/wt/edit/create.sp", form_data, false)
 
-        # Looking for dashboard OID html element: <input type="hidden" name="oid" value="2247529"/>
+        # Looking for page OID html element: <input type="hidden" name="oid" value="2247529"/>
         match_data = /<input\ +type="hidden"\ +name="oid"\ +value="(\d+)"\/>/.match(response.body)
 
-        # TODO: error handling if dashboard Id not found
-        @dashboard_oid = match_data[1]
+        # TODO: error handling if page Id not found
+        @page_oid = match_data[1]
 
-        # save dashboard oid so subsequent deploys perform an update not create
-        @config.add_persistent_property("dashboardOid", @dashboard_oid)
+        # save page oid so subsequent deploys perform an update not create
+        @config.add_persistent_property("pageOid", @page_oid)
       end
 
       # Create empty panel to place app source code
       def create_empty_panel
 
           # Lookup panel meta
-          path = "/slm/panel/getCatalogPanels.sp"
-          params = {:cpoid => @project_oid, :_slug => "/custom/#{@dashboard_oid}", :ignorePanelDefOids => ''}  # empty :ignorePanelDefOids is required; omit and failure; not the droid looking for ;)
-          path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
+          request_path = "/slm/panel/getCatalogPanels.sp"
+          params = {:cpoid => @project_oid, :_slug => "/custom/#{@page_oid}", :ignorePanelDefOids => ''}  # empty :ignorePanelDefOids is required; omit and failure; not the droid looking for ;)
+          path = construct_get(request_path, params)
 
           response = rally_get(path)
 
@@ -241,12 +235,12 @@ module Rally
           end
           
           # Create new panel
-          path = "/slm/dashboard/addpanel.sp"
-          params = {:cpoid => @project_oid, :_slug => "/custom/#{@dashboard_oid}"}
-          path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
+          request_path = "/slm/dashboard/addpanel.sp"
+          params = {:cpoid => @project_oid, :_slug => "/custom/#{@page_oid}"}
+          path = construct_get(request_path, params)
 
           form_data = {"panelDefinitionOid" => custom_html_panel_oid,
-                       "dashboardName" => "#{@tab_name}#{@dashboard_oid}",
+                       "dashboardName" => "#{@tab_name}#{@page_oid}",
                        "col" => 0,
                        "index" => 0}
           response = rally_post(path, form_data)
@@ -256,15 +250,15 @@ module Rally
 
       # Uploads application source
       def upload_app_into_panel
-          path = "/slm/dashboard/changepanelsettings.sp"
-          params = {:cpoid => @project_oid, :_slug => "/custom/#{@dashboard_oid}"}
-          path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
+          request_path = "/slm/dashboard/changepanelsettings.sp"
+          params = {:cpoid => @project_oid, :_slug => "/custom/#{@page_oid}"}
+          path = construct_get(request_path, params)
 
           app_html = File.read(@app_filename)
           panel_settings = {:title => @app_title, :content => app_html}
 
           form_data = {"oid" => @panel_oid,
-                       "dashboardName" => "#{@tab_name}#{@dashboard_oid}",
+                       "dashboardName" => "#{@tab_name}#{@page_oid}",
                        "settings" => JSON.generate(panel_settings)}
 
           response = rally_post(path, form_data)
@@ -272,9 +266,9 @@ module Rally
 
       # Set layout of page
       def set_page_layout
-          path = "/slm/dashboardSwitchLayout.sp"
-          params = {:cpoid => @project_oid, :layout => "SINGLE", :dashboardName => "#{@tab_name}#{@dashboard_oid}", :_slug => "/custom/#{@dashboard_oid}",}
-          path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
+          request_path = "/slm/dashboardSwitchLayout.sp"
+          params = {:cpoid => @project_oid, :layout => "SINGLE", :dashboardName => "#{@tab_name}#{@page_oid}", :_slug => "/custom/#{@page_oid}",}
+          path = construct_get(request_path, params)
 
           response = rally_get(path)
       end
@@ -303,6 +297,11 @@ module Rally
         request.set_form_data(form_data)
         resp = http.request(request)
         return resp
+      end
+
+      # Utility to concatenate the GET request params after the given request path
+      def construct_get(path, params)
+          path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
       end
 
     end
@@ -451,7 +450,7 @@ module Rally
 
       attr_reader :name, :sdk_version
       attr_accessor :javascript, :css, :class_name
-      attr_accessor :server, :username, :password, :project_oid, :dashboard_oid
+      attr_accessor :server, :username, :password, :project_oid, :page_oid
 
       def self.from_config_file(config_file)
         unless File.exist? config_file
@@ -467,7 +466,7 @@ module Rally
         username = Rally::RallyJson.get(config_file, "username")
         password = Rally::RallyJson.get(config_file, "password")
         project_oid = Rally::RallyJson.get(config_file, "projectOid")
-        dashboard_oid = Rally::RallyJson.get(config_file, "dashboardOid")
+        page_oid = Rally::RallyJson.get(config_file, "pageOid")
 
         config = Rally::AppSdk::AppConfig.new(name, sdk_version, config_file)
         config.javascript = javascript
@@ -477,7 +476,7 @@ module Rally
         config.username = username
         config.password = password
         config.project_oid = project_oid
-        config.dashboard_oid = dashboard_oid
+        config.page_oid = page_oid
         config
       end
 
