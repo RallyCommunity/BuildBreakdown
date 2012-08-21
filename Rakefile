@@ -164,22 +164,34 @@ module Rally
         puts "Deploying to Rally..."
 
         login  # obtains session info
-
         resolve_project  # determine if using oid or name from config
 
         puts "* Server:   #{@server}"
         puts "* Username: #{@username}"
         puts "* Project:  #{@project}"
 
-        if page_exists?
-          update_page
-        else
+        if !page_exists?
           create_page
+          puts "> Created '#{@tab_display_name} > #{@app_name}'page"
         end
 
+        upload_app
+        puts "> Uploaded code to '#{@app_name}' page"
+
+        puts "> Ready to Test! #{@server}/#/#{@project_oid}/custom/#{@page_oid}"
       end
 
       private
+
+
+      # Login to Rally and obtain session id
+      # Developer note: After posting login creds, Rally immediately issues a 302 redirect
+      def login
+        form_data = {"j_username" => @username, "j_password" => @password}
+        response = rally_post("/slm/platform/j_platform_security_check.op", form_data, true)
+        # essential for subsequent calls to rally to authenticate internally
+        @session_cookie = get_session_cookie(response)
+      end
 
       # Determines if the app has already been uploaded to an existing page.
       # When a page is first deployed, the oid is saved in the config file.  This oid is
@@ -190,7 +202,6 @@ module Rally
       #   * direct 'page' url format: https://demo01.rallydev.com/#/{project_oid}/custom/{dashboard_oid}
       #                               https://demo01.rallydev.com/#/699319/custom/2248290
       def page_exists?
-
         # not cached
         return false if @page_oid.nil?
 
@@ -202,14 +213,7 @@ module Rally
         return false
       end
 
-      def update_page
-        upload_app_into_panel
-        puts "> Uploaded code to '#{@app_name}' page"
-        puts "> Ready to Test! #{@server}/#/#{@project_oid}/custom/#{@page_oid}"
-      end
-
       def create_page
-
         # new page with no panels
         @page_oid = create_blank_page
         @config.add_persistent_property("pageOid.cached", @page_oid) # cache page oid for subsequent deploys
@@ -220,22 +224,6 @@ module Rally
         # container on page for app code
         @panel_oid = create_empty_panel
         @config.add_persistent_property("panelOid.cached", @panel_oid)  # cache panel oid for subsequent deploys
-
-        puts "> Created '#{@tab_display_name} > #{@app_name}'page"
-        upload_app_into_panel
-        puts "> Uploaded code to '#{@app_name}' page"
-        puts "> Ready to Test! #{@server}/#/#{@project_oid}/custom/#{@page_oid}"
-      end
-
-
-      # Login to Rally and obtain session id
-      # Developer note: After posting login creds, Rally immediately issues a 302 redirect
-      def login
-        form_data = {"j_username" => @username, "j_password" => @password}
-        response = rally_post("/slm/platform/j_platform_security_check.op", form_data, true)
-
-        # essential for subsequent calls to rally to authenticate internally
-        @session_cookie = get_session_cookie(response)
       end
 
       # Extract Rally session cookie from response
@@ -306,7 +294,7 @@ module Rally
       end
 
       # Uploads application source
-      def upload_app_into_panel
+      def upload_app
           request_path = "/slm/dashboard/changepanelsettings.sp"
           params = {:cpoid => @project_oid,
                     :projectScopeUp => false,
@@ -359,7 +347,11 @@ module Rally
             results = JSON.parse(response.body)
             result_count = results["QueryResult"]["TotalResultCount"].to_i
 
-           if result_count > 1
+           if result_count == 0
+             puts "** Error: Unable to find '#{@project}' in Rally.  Check config file."
+             puts "Exiting..."
+             exit 1
+           elsif result_count > 1
              puts "** Error: Multiple projects named '#{@project}' found in Rally.  Set project_oid in config file."
              puts "Exiting..."
              exit 1
@@ -403,15 +395,17 @@ module Rally
         http = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl = true
         http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+        request = Net::HTTP::Get.new(uri.request_uri, {'Cookie' => "#{@session_cookie}"})
         begin
-          request = Net::HTTP::Get.new(uri.request_uri, {'Cookie' => "#{@session_cookie}"})
+          response = http.request(request)
+          # bad username/password login; HTTPUnauthorized
+          raise "Unauthorized access.  Check credentials in config file." if response.code == "401"
         rescue Exception => e
           puts "** Error: Problem connecting to Rally server '#{@server}'."
           puts "** Reason: #{e.message}"
           puts "Exiting..."
           exit 1
         end
-        response = http.request(request)
         return response
       end
 
@@ -431,6 +425,8 @@ module Rally
           response = http.request(request)
           # if session is bad (usually credentials) rally commonly responds with 302
           raise "Invalid session and/or credentials.  Check username/password in config file." if response.code == "302" && !login
+          # bad username/password login; HTTPUnauthorized
+          raise "Unauthorized access.  Check credentials in config file." if response.code == "401"
         rescue Exception => e
           if login
             puts "** Error: Unable to login to Rally server '#{@server}'."
