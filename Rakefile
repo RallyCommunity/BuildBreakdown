@@ -1,6 +1,5 @@
 require 'fileutils'
 require 'net/http'
-require 'cgi'
 require 'uri'
 require 'json'
 
@@ -45,12 +44,9 @@ task :deploy => [:build] do
   config = get_config_from_file
   deploy_filename = Rally::AppSdk::AppTemplateBuilder::HTML
 
-  deployer = Rally::AppSdk::Deployer.new(config.server,
-                                         config.username,
-                                         config.password,
-                                         config.project_oid,
-                                         config.name,
-                                         deploy_filename)
+  deployer = Rally::AppSdk::Deployer.new(config, deploy_filename)
+
+  deployer.login 
 
   if deployer.page_exists?
     deployer.update_page
@@ -82,175 +78,233 @@ module Rally
   module AppSdk
 
     # refactor: http calls
-    # 'myhome' into var
-    # collapse get req params.collect
+    # get params
+    # return response or body/code?
+
+    # Name: Deployer
+    # Description: Class responsible for deploying app source code to a rally server.
+    #              Expects connection & credential info to be located in config.json
+    # Config:
+    #         {
+    #          ...
+    #          "server": "http://rally1.rallydev.com"         # or another instance
+    #          "username": "someone@domain.com"               # rally login name
+    #          "password": "S3cr3tS4uce"                      # rally login password
+    #          "projectOid": 123456                           # project to deploy new page
+    #
+    # Manual Testing: The following curl statements, developed as a prelude to this class,
+    #                 provide an alternate example for (manual) testing.  The uri's, schemes, and
+    #                 params in this class were taken directly from the curl statements.
+    # 
+    #         LOGIN
+    #          curl --location --cookie-jar cookies.txt --data-urlencode "j_username=<user>" --data-urlencode "j_password=<passwd>"
+    #               https://demo01.rallydev.com/slm/platform/j_platform_security_check.op
+    #         CREATE BLANK PAGE
+    #           curl --cookie cookies.txt
+    #                --data "name=foopage&type=DASHBOARD&timeboxFilter=none&pid=myhome&editorMode=create&cpoid=699319&projectScopeUp=false&projectScopeDown=false&version=0"
+    #                "https://demo01.rallydev.com/slm/wt/edit/create.sp"
+    #         GET PANEL DEFINITION
+    #           curl --cookie cookies.txt
+    #                "https://demo01.rallydev.com/slm/panel/getCatalogPanels.sp?cpoid=&ignorePanelDefOids&gesture=getcatalogpaneldefs&slug=/custom/2246145"
+    #         CREATE PANEL
+    #           curl --location --cookie cookies.txt
+    #                --data "panelDefinitionOid=739274&col=0&index=0&dashboardName=myhome224615"
+    #                "https://demo01.rallydev.com/slm/dashboard/addpanel.sp?cpoid=699319&_slug=/custom/2246145"
+    #         UPLOAD PANEL CONTENT
+    #           curl --cookie cookies.txt
+    #             --data "oid=2246150&dashboardName=myhome2246145&settings={'title':'my title','content':'my content'}"
+    #             "https://demo01.rallydev.com/slm/dashboard/changepanelsettings.sp?cpoid=699319&_slug=/custom/2246145"
+    #         SET PAGE LAYOUT (SINGLE)
+    #           curl --cookie cookies.txt
+    #             "https://demo01.rallydev.com/slm/dashboardSwitchLayout.sp?cpoid=699319&layout=SINGLE&dashboardName=myhome2246145&_slug=/custom/2246145"
     class Deployer
 
-      attr_accessor :server, :port, :session_cookie
+      attr_accessor :server, :port
       attr_accessor :username, :password
       attr_accessor :project_oid
-      attr_accessor :dashboard_oid, :custom_html_panel_oid, :panel_oid
+      attr_accessor :dashboard_oid, :panel_oid
 
-      def initialize(server, username, password, project_oid, app_name, app_filename)
-        @server = server
-        @port = "443"               # SSL default
-        @username = username
-        @password = password
-        @project_oid = project_oid
-        @app_name = app_name
-        @app_filename = app_filename
+      def initialize(config, app_filename)
+        @config = config
+        @server = config.server
+        @port = "443"  # SSL default
+        @username = config.username
+        @password =config.password
+        @project_oid = config.project_oid
+        @dashboard_oid = config.dashboard_oid
+        @tab_name = 'myhome'                  # internal name for 'My Home' application tab
+        @app_name = config.name               # user provided name for their app
+        @app_filename = app_filename          # locally built app
+        @session_cookie = nil                 # required during all server communication; defined after login
       end
 
+      # Determines if the app has already been uploaded to an existing page.
+      # When a page is created, the oid is saved in the config file.  This is then
+      # used in subsequent deploys as a 'cached' value to simply update the page.
+      #
+      # Developer Note:
+      #   * direct 'page' url format: https://demo01.rallydev.com/#/699319d/custom/2248290
       def page_exists?
-        return false # FIXME mock; lets work on create first
+
+        return false if @dashboard_oid.nil?     # no cached value
+
+        response = rally_get("/#/#{@project_oid}d/custom/#{@dashboard_oid}")
+
+        case response
+        when Net::HTTPOK
+          return true
+        else
+          # TODO:  if dashboardOid is in prop file, but page DNE, then some cleanup is needed.
+          puts "Warning: A previous page no longer exists.  Will continue creating a new page..."
+          return false
+        end
       end
 
       def update_page
-        puts "Updating page..."
+        puts "Updating Page '#{@app_name}'"
       end
 
       def create_page
-        puts "Creating new page"
-        login
-        puts "> Logged in to #{@server}"
-        create_dashboard
+        puts "Creating New Page"
+        create_blank_page
+        set_page_layout
+        create_empty_panel
         puts "> Created dashboard '#{@app_name}'"
-        create_panel
-        puts "> Created new panel"
-        upload_app
-        puts "> Uploaded app code"
-        set_layout
-        puts "> Set layout"
+        upload_app_into_panel
+        puts "> Uploaded your App!"
+      end
+
+
+      # Login to Rally and obtain session id
+      #
+      def login
+        form_data = {"j_username" => @username, "j_password" => @password}
+        response = rally_post("/slm/platform/j_platform_security_check.op", form_data, true)
+
+        all_cookies = response.get_fields('set-cookie')
+        all_cookies.each { | cookie | @session_cookie = cookie if cookie =~ /JSESSIONID/ }
+
+        case response
+        when Net::HTTPRedirection then
+          redirect_uri = response['location']
+          uri = URI.parse(redirect_uri)
+          redirect_response = rally_get(uri.request_uri)
+
+          case redirect_response
+          when Net::HTTPOK then
+            puts "> Logged in to #{@server}"
+          else
+            puts "> error logging in.  Exiting"
+            exit 1
+          end
+        end
+
       end
 
       private
 
-      # Login to Rally and obtain session id
-      #
-      #  curl --location --cookie-jar cookies.txt --data-urlencode "j_username=<user>" --data-urlencode "j_password=<passwd>"
-      #       https://demo01.rallydev.com/slm/platform/j_platform_security_check.op
-      def login
-        uri = URI.parse(@server + ":" + @port + "/slm/platform/j_platform_security_check.op")
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = true
-        http.verify_mode = OpenSSL::SSL::VERIFY_NONE
-        request = Net::HTTP::Post.new(uri.request_uri)
-        request.set_form_data({"j_username" => @username, "j_password" => @password})
-        resp = http.request(request)
-        all_cookies = resp.get_fields('set-cookie')
-        all_cookies.each { | cookie |
-            @session_cookie = cookie if cookie =~ /JSESSIONID/
-        }
-        case resp
-        when Net::HTTPRedirection then
-          location = resp['location']
-          uri = URI.parse(location)
-          http = Net::HTTP.new(uri.host, uri.port)
-          http.use_ssl = true
-          http.verify_mode = OpenSSL::SSL::VERIFY_NONE
-          request = Net::HTTP::Get.new(uri.request_uri, {'Cookie' => @session_cookie})
-          resp = http.request(request)
-        end
-      end
+      # Create new dashboard page
+      def create_blank_page
+        form_data = {"name" => @app_name,
+                     "type" => 'DASHBOARD',
+                     "timeboxFilter" => "none",
+                     "pid" => @tab_name,
+                     "editorMode" => "create",
+                     "cpoid" => @project_oid,
+                     "version" => 0}
+        response = rally_post("/slm/wt/edit/create.sp", form_data, false)
 
-      #   curl --cookie cookies.txt
-      #        --data "name=foopage&type=DASHBOARD&timeboxFilter=none&pid=myhome&editorMode=create&cpoid=699319&projectScopeUp=false&projectScopeDown=false&version=0"
-      #        "https://demo01.rallydev.com/slm/wt/edit/create.sp"
-      def create_dashboard
-        uri = URI.parse(@server + ":" + @port + "/slm/wt/edit/create.sp")
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = true
-        http.verify_mode = OpenSSL::SSL::VERIFY_NONE
-        request = Net::HTTP::Post.new(uri.request_uri, {'Cookie' => @session_cookie})
-        request.set_form_data({"name" => @app_name,
-                               "type" => 'DASHBOARD',
-                               "timeboxFilter" => "none",
-                               "pid" => "myhome",
-                               "editorMode" => "create",
-                               "cpoid" => @project_oid,
-                               "version" => 0})
-        resp = http.request(request)
         # Looking for dashboard OID html element: <input type="hidden" name="oid" value="2247529"/>
-        match_data = /<input\ +type="hidden"\ +name="oid"\ +value="(\d+)"\/>/.match(resp.body)
+        match_data = /<input\ +type="hidden"\ +name="oid"\ +value="(\d+)"\/>/.match(response.body)
 
         # TODO: error handling if dashboard Id not found
         @dashboard_oid = match_data[1]
+
+        # save dashboard oid so subsequent deploys perform an update not create
+        @config.add_persistent_property("dashboardOid", @dashboard_oid)
       end
 
-      #   GET PANEL
-      #   curl --cookie cookies.txt
-      #        "https://demo01.rallydev.com/slm/panel/getCatalogPanels.sp?cpoid=&ignorePanelDefOids&gesture=getcatalogpaneldefs&slug=/custom/2246145"
-      #   CREATE PANEL
-      #   curl --location --cookie cookies.txt
-      #        --data "panelDefinitionOid=739274&col=0&index=0&dashboardName=myhome224615"
-      #        "https://demo01.rallydev.com/slm/dashboard/addpanel.sp?cpoid=699319&_slug=/custom/2246145"
-      def create_panel
-          uri = URI.parse(@server + ":" + @port + "/slm/panel/getCatalogPanels.sp")
-          http = Net::HTTP.new(uri.host, uri.port)
-          http.use_ssl = true
-          http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+      # Create empty panel to place app source code
+      def create_empty_panel
 
+          # Lookup panel meta
+          path = "/slm/panel/getCatalogPanels.sp"
           params = {:cpoid => @project_oid, :_slug => "/custom/#{@dashboard_oid}", :ignorePanelDefOids => ''}  # empty :ignorePanelDefOids is required; omit and failure; not the droid looking for ;)
-          path = "#{uri.request_uri}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&')) if not params.nil?
+          path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
 
-          request = Net::HTTP::Get.new(path, {'Cookie' => @session_cookie})
-          resp = http.request(request)
-          panels = JSON.parse(resp.body)
+          response = rally_get(path)
+
+          panels = JSON.parse(response.body)
+          custom_html_panel_oid = nil
           panels.each do |panel|
-            @custom_html_panel_oid = panel['oid'] if panel['title'] == "Custom HTML"
+            custom_html_panel_oid = panel['oid'] if panel['title'] == "Custom HTML"
           end
-
-          uri = URI.parse(@server + ":" + @port + "/slm/dashboard/addpanel.sp")
-          http = Net::HTTP.new(uri.host, uri.port)
-          http.use_ssl = true
-          http.verify_mode = OpenSSL::SSL::VERIFY_NONE
-
+          
+          # Create new panel
+          path = "/slm/dashboard/addpanel.sp"
           params = {:cpoid => @project_oid, :_slug => "/custom/#{@dashboard_oid}"}
-          path = "#{uri.request_uri}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&')) if not params.nil?
+          path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
 
-          request = Net::HTTP::Post.new(uri.request_uri, {'Cookie' => @session_cookie})
-          request.set_form_data({"panelDefinitionOid" => @custom_html_panel_oid,
-                                 "dashboardName" => "myhome#{@dashboard_oid}",
-                                 "col" => 0,
-                                 "index" => 0})
-          resp = http.request(request)
-          @panel_oid = JSON.parse(resp.body)['oid']
+          form_data = {"panelDefinitionOid" => custom_html_panel_oid,
+                       "dashboardName" => "#{@tab_name}#{@dashboard_oid}",
+                       "col" => 0,
+                       "index" => 0}
+          response = rally_post(path, form_data)
+          @panel_oid = JSON.parse(response.body)['oid']
 
       end
-      #   curl --cookie cookies.txt
-      #     --data "oid=2246150&dashboardName=myhome2246145&settings={'title':'my title','content':'my content'}"
-      #     "https://demo01.rallydev.com/slm/dashboard/changepanelsettings.sp?cpoid=699319&_slug=/custom/2246145"
-      def upload_app
-          uri = URI.parse(@server + ":" + @port + "/slm/dashboard/changepanelsettings.sp")
-          http = Net::HTTP.new(uri.host, uri.port)
-          http.use_ssl = true
-          http.verify_mode = OpenSSL::SSL::VERIFY_NONE
 
+      # Uploads application source
+      def upload_app_into_panel
+          path = "/slm/dashboard/changepanelsettings.sp"
           params = {:cpoid => @project_oid, :_slug => "/custom/#{@dashboard_oid}"}
-          path = "#{uri.request_uri}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&')) if not params.nil?
+          path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
 
-          request = Net::HTTP::Post.new(uri.request_uri, {'Cookie' => @session_cookie})
           app_html = File.read(@app_filename)
           panel_settings = {:title => @app_title, :content => app_html}
-          request.set_form_data({"oid" => @panel_oid,
-                                 "dashboardName" => "myhome#{@dashboard_oid}",
-                                 "settings" => JSON.generate(panel_settings)})
-          resp = http.request(request)
-      end
-      #   curl --cookie cookies.txt
-      #     "https://demo01.rallydev.com/slm/dashboardSwitchLayout.sp?cpoid=699319&layout=SINGLE&dashboardName=myhome2246145&_slug=/custom/2246145"
-      def set_layout
-          uri = URI.parse(@server + ":" + @port + "/slm/dashboardSwitchLayout.sp")
-          http = Net::HTTP.new(uri.host, uri.port)
-          http.use_ssl = true
-          http.verify_mode = OpenSSL::SSL::VERIFY_NONE
 
-          params = {:cpoid => @project_oid, :layout => "SINGLE", :dashboardName => "myhome#{@dashboard_oid}", :_slug => "/custom/#{@dashboard_oid}",}
-          path = "#{uri.request_uri}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&')) if not params.nil?
+          form_data = {"oid" => @panel_oid,
+                       "dashboardName" => "#{@tab_name}#{@dashboard_oid}",
+                       "settings" => JSON.generate(panel_settings)}
 
-          request = Net::HTTP::Get.new(path, {'Cookie' => @session_cookie})
-          resp = http.request(request)
+          response = rally_post(path, form_data)
       end
+
+      # Set layout of page
+      def set_page_layout
+          path = "/slm/dashboardSwitchLayout.sp"
+          params = {:cpoid => @project_oid, :layout => "SINGLE", :dashboardName => "#{@tab_name}#{@dashboard_oid}", :_slug => "/custom/#{@dashboard_oid}",}
+          path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
+
+          response = rally_get(path)
+      end
+
+      # Perform HTTP GET to Rally with given uri path
+      def rally_get(path)
+        path = "/#{path}" if path[0] != '/'    # ensure prepended slash
+        uri = URI.parse(@server + ":" + @port + path)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = true
+        http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+        request = Net::HTTP::Get.new(uri.request_uri, {'Cookie' => "#{@session_cookie}"})
+        resp = http.request(request)
+        return resp
+      end
+
+      # Perform HTTP POST to Rally with given uri path
+      def rally_post(path, form_data, login = false)
+        path = "/#{path}" if path[0] != '/'    # ensure prepended slash
+        uri = URI.parse(@server + ":" + @port + path)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = true
+        http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+        headers = {'Cookie' => @session_cookie} unless login
+        request = Net::HTTP::Post.new(uri.request_uri, headers)
+        request.set_form_data(form_data)
+        resp = http.request(request)
+        return resp
+      end
+
     end
 
     ## Builds the RallyJson config file as well as the JavaScript, CSS, and HTML
@@ -397,7 +451,7 @@ module Rally
 
       attr_reader :name, :sdk_version
       attr_accessor :javascript, :css, :class_name
-      attr_accessor :server, :username, :password, :project_oid
+      attr_accessor :server, :username, :password, :project_oid, :dashboard_oid
 
       def self.from_config_file(config_file)
         unless File.exist? config_file
@@ -413,8 +467,9 @@ module Rally
         username = Rally::RallyJson.get(config_file, "username")
         password = Rally::RallyJson.get(config_file, "password")
         project_oid = Rally::RallyJson.get(config_file, "projectOid")
+        dashboard_oid = Rally::RallyJson.get(config_file, "dashboardOid")
 
-        config = Rally::AppSdk::AppConfig.new(name, sdk_version)
+        config = Rally::AppSdk::AppConfig.new(name, sdk_version, config_file)
         config.javascript = javascript
         config.css = css
         config.class_name = class_name
@@ -422,12 +477,14 @@ module Rally
         config.username = username
         config.password = password
         config.project_oid = project_oid
+        config.dashboard_oid = dashboard_oid
         config
       end
 
-      def initialize(name, sdk_version)
+      def initialize(name, sdk_version, file)
         @name = sanitize_string name
         @sdk_version = sdk_version
+        @file = file
         @javascript = []
         @css = []
       end
@@ -438,6 +495,13 @@ module Rally
 
       def css=(file)
         @css = (@css << file).flatten
+      end
+
+      def add_persistent_property(name, value)
+        current_config = File.read(@file)
+        rconfig = JSON.parse(current_config)
+        rconfig[name] = value
+        File.open(@file, 'w') {|f| f.write(JSON.pretty_generate(rconfig))}
       end
 
       def validate
@@ -639,7 +703,11 @@ STYLE_BLOCK    </style>
     ],
     "css": [
         DEFAULT_APP_CSS_FILE
-    ]
+    ],
+    "server": "http://rally1.rallydev.com",
+    "username": "you@domain.com",
+    "password": "S3cr3t",
+    "projectOid": 12345
 }
     END
 
