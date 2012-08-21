@@ -37,21 +37,28 @@ task :clean do
   remove_files Rally::AppSdk::AppTemplateBuilder.get_auto_generated_files
 end
 
-desc "Deploy app to rally server"
-task :deploy => [:build] do
-  puts "Deploying to Rally..."
+# convenience task to deploy the non-debug app version
+task :deploy => ["deploy:app"] do
+end
 
-  # TODO: consider flag for debug version
-  app_file = Rally::AppSdk::AppTemplateBuilder::HTML
+namespace "deploy" do
 
-  deployr = Rally::AppSdk::Deployr.new(get_config_from_file, app_file)
+  desc "Deploy an app to a Rally server"
+  task :app => [:build] do
+    config = get_config_from_file
+    app_filename = Rally::AppSdk::AppTemplateBuilder::HTML
+    puts "Deploying to Rally..."
+    deployr = Rally::AppSdk::Deployr.new(config, app_filename)
+    deployr.deploy
+  end
 
-  deployr.login  # obtains session info
-
-  if deployr.page_exists?
-    deployr.update_page
-  else
-    deployr.create_page
+  desc "Deploy a debug app to a Rally server"
+  task :debug => ["rake:debug"] do
+    config = get_config_from_file
+    app_filename = Rally::AppSdk::AppTemplateBuilder::HTML_DEBUG
+    puts "Deploying to Rally..."
+    deployr = Rally::AppSdk::Deployr.new(config, app_filename)
+    deployr.deploy
   end
 
 end
@@ -77,22 +84,36 @@ end
 module Rally
   module AppSdk
 
-    # get params
-    # return response or body/code?
+    # project name in config
+    # error handling
+    #  - project not found
+    #  - server unavail
 
     # Name: Deployr
-    # Description: Class responsible for deploying Your app to a Rally server.  Already deployed? Your source
-    #              will just be updated.  Otherwise, a new page and panel, with single layout, will be created.
-    #              Note: Expects connection & credential info to be safely located (chmod 600) in config.json.
+    # Description: Class responsible for deploying Your app to a Rally server.
+    #              Already deployed? Your page will just be updated with new app source.
+    #              For new apps, a new single-layout page with a panel will be created.
+    #              Simply enter connection details in the config file.
+    #
+    #              For convenience, you can specify the name of your Rally project in
+    #              the config file.  If that name is not unique, you must set the project OID
+    #              instead.  If both are specific, only the OID is used.  To find a project OID:
+    #              [Rally > Setup > Workspace & Projects > hover project link > copy link location]
+    #              eg. https://<server>/#/699319d/detail/project/699319 --> 699319 is the Project OID.
+    #
+    # Security: Connection & credential info should be safely located (chmod 600) in config.json.
+    #
     # Config:
     #         config.json
     #         { 
     #          ...
-    #          "server": "http://rally1.rallydev.com"         # or another instance
-    #          "username": "someone@domain.com"               # rally login name
-    #          "password": "S3cr3tS4uce"                      # rally login password
-    #          "projectOid": "12345"                          # project to deploy new page
-    #          "pageOid": "67890"                             # cached page reference; WILL BE GENERATED 1st DEPLOY
+    #          "server": "http://rally1.rallydev.com"   # or another instance
+    #          "username": "someone@domain.com"         # rally login name
+    #          "password": "S3cr3tS4uce"                # rally login password
+    #          "project": "Some Project"                # unique name of the project to deploy to
+    #          "projectOid": "123"                      # [optional] id of the project to deploy new page
+    #          "pageOidCached": "456"                   # !internal! cached page reference generated on 1st deploy
+    #          "panelOidCached": "789"                  # !internal! cached panel reference generated on 1st deploy
     #         }
     #
     # Workflow:
@@ -143,6 +164,17 @@ module Rally
         @session_cookie = nil                 # required during all server communication; defined after login
       end
 
+      def deploy
+        login  # obtains session info
+        if page_exists?
+          update_page
+        else
+          create_page
+        end
+      end
+
+      private
+
       # Determines if the app has already been uploaded to an existing page.
       # When a page is first deployed, the oid is saved in the config file.  This oid is
       # then used in subsequent deploys as a 'cached' value to simply update the page.  Even with
@@ -166,23 +198,26 @@ module Rally
 
       def update_page
         upload_app_into_panel
-        puts "> Uploaded app to '#{@app_name}' page"
-        puts "> Go Test it! #{@server}/#/#{@project_oid}/custom/#{@page_oid}"
+        puts "> Uploaded code to '#{@app_name}' page"
+        puts "> Ready to Test! #{@server}/#/#{@project_oid}/custom/#{@page_oid}"
       end
 
       def create_page
         # new page with no panels
         @page_oid = create_blank_page
-        @config.add_persistent_property("pageOid", @page_oid) # cache page oid for subsequent deploys
+        @config.add_persistent_property("pageOidCached", @page_oid) # cache page oid for subsequent deploys
+
         # set 'single' layout
         set_page_layout
+
         # container on page for app code
         @panel_oid = create_empty_panel
-        @config.add_persistent_property("panelOid", @panel_oid)  # cache panel oid for subsequent deploys
-        puts "> Created page '#{@app_name}'"
+        @config.add_persistent_property("panelOidCached", @panel_oid)  # cache panel oid for subsequent deploys
+
+        puts "> Created '#{@app_name}'page"
         upload_app_into_panel
-        puts "> Uploaded app"
-        puts "> Go Test it! #{@server}/#/#{@project_oid}/custom/#{@page_oid}"
+        puts "> Uploaded code to '#{@app_name}' page"
+        puts "> Ready to Test! #{@server}/#/#{@project_oid}/custom/#{@page_oid}"
       end
 
 
@@ -194,8 +229,6 @@ module Rally
         # essential for subsequent calls to rally to authenticate internally
         @session_cookie = get_session_cookie(response)
       end
-
-      private
 
       # Extract Rally session cookie from response
       def get_session_cookie(response)
@@ -314,7 +347,7 @@ module Rally
         http.use_ssl = true
         http.verify_mode = OpenSSL::SSL::VERIFY_NONE
 
-        headers = {'Referer' => '#{server}', 'Cookie' => @session_cookie} unless login   # don't even have cookies until -after- login :)
+        headers = {'Cookie' => @session_cookie} unless login   # don't even have cookies until -after- login :)
         request = Net::HTTP::Post.new(uri.request_uri, headers)
         request.set_form_data(form_data)
         response = http.request(request)
@@ -489,8 +522,8 @@ module Rally
         username = Rally::RallyJson.get(config_file, "username")
         password = Rally::RallyJson.get(config_file, "password")
         project_oid = Rally::RallyJson.get(config_file, "projectOid")
-        page_oid = Rally::RallyJson.get(config_file, "pageOid")
-        panel_oid = Rally::RallyJson.get(config_file, "panelOid")
+        page_oid = Rally::RallyJson.get(config_file, "pageOidCached")
+        panel_oid = Rally::RallyJson.get(config_file, "panelOidCached")
 
         config = Rally::AppSdk::AppConfig.new(name, sdk_version, config_file)
         config.javascript = javascript
