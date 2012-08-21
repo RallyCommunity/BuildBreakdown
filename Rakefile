@@ -41,12 +41,12 @@ desc "Deploy app to rally server"
 task :deploy => [:build] do
   puts "Deploying to Rally..."
 
-  config = get_config_from_file
-  deploy_filename = Rally::AppSdk::AppTemplateBuilder::HTML
+  # TODO: consider flag for debug version
+  app_file = Rally::AppSdk::AppTemplateBuilder::HTML
 
-  deployr = Rally::AppSdk::Deployr.new(config, deploy_filename)
+  deployr = Rally::AppSdk::Deployr.new(get_config_from_file, app_file)
 
-  deployr.login              # obtain session info
+  deployr.login  # obtains session info
 
   if deployr.page_exists?
     deployr.update_page
@@ -91,7 +91,8 @@ module Rally
     #          "server": "http://rally1.rallydev.com"         # or another instance
     #          "username": "someone@domain.com"               # rally login name
     #          "password": "S3cr3tS4uce"                      # rally login password
-    #          "projectOid": 123456                           # project to deploy new page
+    #          "projectOid": "12345"                          # project to deploy new page
+    #          "pageOid": "67890"                             # cached page reference; WILL BE GENERATED 1st DEPLOY
     #         }
     #
     # Workflow:
@@ -147,31 +148,40 @@ module Rally
       # a cached value, we do a sanity check to verify the page _really_ exists.
       #
       # Developer Note:
-      #   * direct 'page' url format: https://demo01.rallydev.com/#/{project_oid}d/custom/{dashboard_oid}
-      #                               https://demo01.rallydev.com/#/699319d/custom/2248290
+      #   * direct 'page' url format: https://demo01.rallydev.com/#/{project_oid}/custom/{dashboard_oid}
+      #                               https://demo01.rallydev.com/#/699319/custom/2248290
       def page_exists?
-        return false if @page_oid.nil?  # not cached
 
-        # no sleep for the wicked; verify page _still_ exists
-        response = rally_get("/#/#{@project_oid}d/custom/#{@page_oid}")
+        # not cached
+        return false if @page_oid.nil?
+
+        # even cached, lets verify page still exists
+        response = rally_get("/#/#{@project_oid}/custom/#{@page_oid}")
         return true if response.class == Net::HTTPOK
 
-        # TODO:  if pageOid is in prop file, but page DNE, then some cleanup is needed; give users url to del? auto del?
-        puts "Warning: A previous page no longer exists.  Will continue creating a new page..."
+        # cached page that DNE means user deleted it; lets just create again
         return false
       end
 
       def update_page
-        puts "Updating Page '#{@app_name}'"
+        upload_app_into_panel
+        puts "> Uploaded app to '#{@app_name}' page"
+        puts "> Go Test it! #{@server}/#/#{@project_oid}/custom/#{@page_oid}"
       end
 
       def create_page
-        create_blank_page
+        # new page with no panels
+        @page_oid = create_blank_page
+        # cache page oid for subsequent deploys
+        @config.add_persistent_property("pageOid", @page_oid)
+        # set 'single' layout
         set_page_layout
-        create_empty_panel
+        # container on page for app code
+        @panel_oid = create_empty_panel
         puts "> Created page '#{@app_name}'"
         upload_app_into_panel
-        puts "> Test Your App!"
+        puts "> Uploaded app"
+        puts "> Go Test it! #{@server}/#/#{@project_oid}/custom/#{@page_oid}"
       end
 
 
@@ -206,16 +216,16 @@ module Rally
                      "editorMode" => "create",
                      "cpoid" => @project_oid,
                      "version" => 0}
-        response = rally_post("/slm/wt/edit/create.sp", form_data, false)
+        response = rally_post("/slm/wt/edit/create.sp", form_data)
 
-        # Looking for page OID html element: <input type="hidden" name="oid" value="2247529"/>
+        # Looking for page OID html element e.g. <input type="hidden" name="oid" value="2247529"/>
         match_data = /<input\ +type="hidden"\ +name="oid"\ +value="(\d+)"\/>/.match(response.body)
 
         # TODO: error handling if page Id not found
-        @page_oid = match_data[1]
+        page_oid = match_data[1]
 
-        # save page oid so subsequent deploys perform an update not create
-        @config.add_persistent_property("pageOid", @page_oid)
+        return page_oid
+
       end
 
       # Create empty panel to place app source code
@@ -223,7 +233,9 @@ module Rally
 
           # Lookup panel meta
           request_path = "/slm/panel/getCatalogPanels.sp"
-          params = {:cpoid => @project_oid, :_slug => "/custom/#{@page_oid}", :ignorePanelDefOids => ''}  # empty :ignorePanelDefOids is required; omit and failure; not the droid looking for ;)
+          params = {:cpoid => @project_oid,
+                    :_slug => "/custom/#{@page_oid}",
+                    :ignorePanelDefOids => ''}  # empty ignorePanelDefOids apparently is required
           path = construct_get(request_path, params)
 
           response = rally_get(path)
@@ -244,14 +256,20 @@ module Rally
                        "col" => 0,
                        "index" => 0}
           response = rally_post(path, form_data)
-          @panel_oid = JSON.parse(response.body)['oid']
 
+          # response is json that just contains oid e.g. {"oid": "1234556"}
+          panel_oid = JSON.parse(response.body)['oid']
+
+          return panel_oid
       end
 
       # Uploads application source
       def upload_app_into_panel
           request_path = "/slm/dashboard/changepanelsettings.sp"
-          params = {:cpoid => @project_oid, :_slug => "/custom/#{@page_oid}"}
+          params = {:cpoid => @project_oid,
+                    :projectScopeUp => false,
+                    :projectScopeDown => true,
+                    :_slug => "/custom/#{@page_oid}"}
           path = construct_get(request_path, params)
 
           app_html = File.read(@app_filename)
@@ -260,16 +278,18 @@ module Rally
           form_data = {"oid" => @panel_oid,
                        "dashboardName" => "#{@tab_name}#{@page_oid}",
                        "settings" => JSON.generate(panel_settings)}
-
           response = rally_post(path, form_data)
+          puts response.inspect
       end
 
       # Set layout of page
       def set_page_layout
           request_path = "/slm/dashboardSwitchLayout.sp"
-          params = {:cpoid => @project_oid, :layout => "SINGLE", :dashboardName => "#{@tab_name}#{@page_oid}", :_slug => "/custom/#{@page_oid}",}
+          params = {:cpoid => @project_oid,
+                    :layout => "SINGLE",
+                    :dashboardName => "#{@tab_name}#{@page_oid}",
+                    :_slug => "/custom/#{@page_oid}",}
           path = construct_get(request_path, params)
-
           response = rally_get(path)
       end
 
@@ -281,25 +301,30 @@ module Rally
         http.use_ssl = true
         http.verify_mode = OpenSSL::SSL::VERIFY_NONE
         request = Net::HTTP::Get.new(uri.request_uri, {'Cookie' => "#{@session_cookie}"})
-        resp = http.request(request)
-        return resp
+        response = http.request(request)
+        return response
       end
 
       # Perform HTTP POST to Rally with given uri path
       def rally_post(path, form_data, login = false)
         path = "/#{path}" if path[0] != '/'    # ensure prepended slash
         uri = URI.parse(@server + ":" + @port + path)
+puts uri
         http = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl = true
         http.verify_mode = OpenSSL::SSL::VERIFY_NONE
-        headers = {'Cookie' => @session_cookie} unless login
+
+        headers = {'Referer' => '#{server}', 'Cookie' => @session_cookie} unless login   # don't even have cookies until -after- login :)
         request = Net::HTTP::Post.new(uri.request_uri, headers)
         request.set_form_data(form_data)
-        resp = http.request(request)
-        return resp
+puts request.inspect
+puts form_data.inspect
+        response = http.request(request)
+        return response
       end
 
       # Utility to concatenate the GET request params after the given request path
+      # Given params={:foo => "bar", "baz" => "quux"} generate 'path?foo=bar?baz=quux'
       def construct_get(path, params)
           path = "#{path}?".concat(params.collect { |k,v| "#{k}=#{v}" }.join('&'))
       end
