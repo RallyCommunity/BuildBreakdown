@@ -3,9 +3,6 @@ require 'net/http'
 require 'uri'
 require 'json'
 
-#require 'net/https'
-
-
 ENABLE_JSLINT = ENV['ENABLE_JSLINT'] == 'true'
 
 task :default => [:debug, :build]
