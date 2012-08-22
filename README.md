@@ -11,8 +11,9 @@ Available tasks are:
     rake build                      # Build a deployable app which includes all JavaScript and CSS resources inline. Use after you app is working as you intend so that it can be copied into Rally.
     rake clean                      # Clean all generated output
     rake jslint                     # Run jslint on all JavaScript files used by this app
-    rake deploy:app                 # Deploy the app to a Rally server
+    rake deploy                     # Deploy the app to a Rally server
     rake deploy:debug               # Deploy the debug app to a Rally server
+    rake deploy:info                # Display deployment information
     
 You can find more information on installing Ruby and using rake tasks to simplify app development here: https://rally1.rallydev.com/apps/2.0p/doc/#!/guide/appsdk_20_starter_kit
 
