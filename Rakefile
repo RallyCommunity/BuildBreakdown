@@ -34,13 +34,12 @@ task :clean do
   remove_files Rally::AppSdk::AppTemplateBuilder.get_auto_generated_files
 end
 
-# convenience task to deploy the non-debug app version
+desc "Deploy an app to a Rally server"
 task :deploy => ["deploy:app"] do
 end
 
 namespace "deploy" do
-
-  desc "Deploy an app to a Rally server"
+  # wrapped with top-level 'deploy' target as a convenience
   task :app => ["rake:build"] do
     config = get_config_from_file
     app_filename = Rally::AppSdk::AppTemplateBuilder::HTML
@@ -56,6 +55,13 @@ namespace "deploy" do
     deployr.deploy
   end
 
+  desc "Display deploy information"
+  task :info do
+    config = get_config_from_file
+    app_filename = Rally::AppSdk::AppTemplateBuilder::HTML
+    deployr = Rally::AppSdk::Deployr.new(config, app_filename)
+    deployr.info
+  end
 end
 
 desc "Run jslint on all JavaScript files used by this app, can be enabled by setting ENABLE_JSLINT=true."
@@ -160,7 +166,6 @@ module Rally
       end
 
       def deploy
-
         puts "Deploying to Rally..."
 
         login  # obtains session info
@@ -179,6 +184,21 @@ module Rally
         puts "> Uploaded code to '#{@app_name}' page"
 
         puts "> Ready to Test! #{@server}/#/#{@project_oid}/custom/#{@page_oid}"
+      end
+
+      def info
+        login  # obtains session info
+        resolve_project  # determine if using oid or name from config
+
+        is_deployed = !@page_oid.nil?   # if page_oid is cached, then we have deployed
+
+        puts "    Status: #{(is_deployed)? '* ': '* Not '}Deployed *"
+        puts "      Page: #{@server}/#/#{@project_oid}/custom/#{@page_oid}" if is_deployed
+        puts "    Server: #{@server}"
+        puts " Page Name: #{@app_name}"
+        puts "  Username: #{@username}"
+        puts "   Project: #{@project}" if !@project.nil?
+        puts "ProjectOid: #{@project_oid}" if !@project_oid.nil?
       end
 
       private
