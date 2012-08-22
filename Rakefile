@@ -619,7 +619,7 @@ module Rally
         config
       end
 
-      def initialize(name, sdk_version, file)
+      def initialize(name, sdk_version, file = nil)
         @name = sanitize_string name
         @sdk_version = sdk_version
         @file = file
@@ -845,7 +845,7 @@ STYLE_BLOCK    </style>
     "server": "http://rally1.rallydev.com",
     "username": "you@domain.com",
     "password": "S3cr3t",
-    "projectOid": 12345
+    "project": "YourProject"
 }
     END
 
