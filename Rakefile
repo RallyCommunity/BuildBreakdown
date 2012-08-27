@@ -12,8 +12,19 @@ task :new, :app_name, :sdk_version do |t, args|
   args.with_defaults(:sdk_version => "2.0p2")
   Dir.chdir(Rake.original_dir)
 
+  puts
+  puts "Generating new #{args[:sdk_version]} App Development framework..."
+
   config = Rally::AppSdk::AppConfig.new(args.app_name, args.sdk_version)
   Rally::AppSdk::AppTemplateBuilder.new(config).build
+
+  puts "Finished!"
+  puts
+  puts "To build your app, edit App.js then run '$rake build'."
+  puts "To deploy your app, edit deploy.json then run '$rake deploy'."
+  puts
+  puts "* Note: deploy.json stores login credentials and will be ignored by git."
+  puts
 end
 
 desc "Build a deployable app which includes all JavaScript and CSS resources inline"
@@ -235,14 +246,14 @@ module Rally
       def create_page
         # new page with no panels
         @page_oid = create_blank_page
-        @config.add_persistent_property("pageOid.cached", @page_oid) # cache page oid for subsequent deploys
+        @config.add_persistent_deploy_property("pageOid.cached", @page_oid) # cache page oid for subsequent deploys
 
         # set 'single' layout
         set_page_layout
 
         # container on page for app code
         @panel_oid = create_empty_panel
-        @config.add_persistent_property("panelOid.cached", @panel_oid)  # cache panel oid for subsequent deploys
+        @config.add_persistent_deploy_property("panelOid.cached", @panel_oid)  # cache panel oid for subsequent deploys
       end
 
       # Extract Rally session cookie from response
@@ -466,6 +477,8 @@ module Rally
     class AppTemplateBuilder
 
       CONFIG_FILE = "config.json"
+      DEPLOY_FILE = "deploy.json"
+      GITIGNORE_FILE = ".gitignore"
       DEPLOY_DIR = 'deploy'
       JAVASCRIPT_FILE = "App.js"
       CSS_FILE = "app.css"
@@ -489,6 +502,8 @@ module Rally
         @config.class_name = CLASS_NAME
 
         create_file_from_template CONFIG_FILE, Rally::AppTemplates::CONFIG_TPL
+        create_file_from_template DEPLOY_FILE, Rally::AppTemplates::DEPLOY_TPL
+        create_file_from_template GITIGNORE_FILE, Rally::AppTemplates::GITIGNORE_TPL
         create_file_from_template JAVASCRIPT_FILE, Rally::AppTemplates::JAVASCRIPT_TPL, {:escape => true}
         create_file_from_template CSS_FILE, Rally::AppTemplates::CSS_TPL
       end
@@ -531,7 +546,7 @@ module Rally
       end
 
       def get_template_files
-        [CONFIG_FILE, JAVASCRIPT_FILE, CSS_FILE]
+        [CONFIG_FILE, DEPLOY_FILE, JAVASCRIPT_FILE, CSS_FILE]
       end
 
       def create_file_from_template(file, template, opts = {})
@@ -607,7 +622,7 @@ module Rally
       attr_accessor :javascript, :css, :class_name
       attr_accessor :server, :username, :password, :project, :project_oid, :page_oid, :panel_oid
 
-      def self.from_config_file(config_file)
+      def self.from_config_file(config_file, deploy_file)
         unless File.exist? config_file
           raise Exception.new("Could not find #{config_file}.  Did you run 'rake new[\"App Name\"]'?")
         end
@@ -617,15 +632,16 @@ module Rally
         class_name = Rally::RallyJson.get(config_file, "className")
         javascript = Rally::RallyJson.get_array(config_file, "javascript")
         css = Rally::RallyJson.get_array(config_file, "css")
-        server = Rally::RallyJson.get(config_file, "server")
-        username = Rally::RallyJson.get(config_file, "username")
-        password = Rally::RallyJson.get(config_file, "password")
-        project_oid = Rally::RallyJson.get(config_file, "projectOid")
-        project = Rally::RallyJson.get(config_file, "project")
-        page_oid = Rally::RallyJson.get(config_file, "pageOid.cached")
-        panel_oid = Rally::RallyJson.get(config_file, "panelOid.cached")
 
-        config = Rally::AppSdk::AppConfig.new(name, sdk_version, config_file)
+        server = Rally::RallyJson.get(deploy_file, "server")
+        username = Rally::RallyJson.get(deploy_file, "username")
+        password = Rally::RallyJson.get(deploy_file, "password")
+        project_oid = Rally::RallyJson.get(deploy_file, "projectOid")
+        project = Rally::RallyJson.get(deploy_file, "project")
+        page_oid = Rally::RallyJson.get(deploy_file, "pageOid.cached")
+        panel_oid = Rally::RallyJson.get(deploy_file, "panelOid.cached")
+
+        config = Rally::AppSdk::AppConfig.new(name, sdk_version, config_file, deploy_file)
         config.javascript = javascript
         config.css = css
         config.class_name = class_name
@@ -639,10 +655,11 @@ module Rally
         config
       end
 
-      def initialize(name, sdk_version, file = nil)
+      def initialize(name, sdk_version, config_file = nil, deploy_file = nil)
         @name = sanitize_string name
         @sdk_version = sdk_version
-        @file = file
+        @config_file = config_file
+        @deploy_file = deploy_file
         @javascript = []
         @css = []
       end
@@ -655,11 +672,17 @@ module Rally
         @css = (@css << file).flatten
       end
 
-      def add_persistent_property(name, value)
-        current_config = File.read(@file)
+      # Add new name/value pair to the deploy config file
+      def add_persistent_deploy_property(name, value)
+        add_persistent_property(@deploy_file, name, value)
+      end
+
+      # Utility to add name/value pair to given config file
+      def add_persistent_property(file, name, value)
+        current_config = File.read(file)
         rconfig = JSON.parse(current_config)
         rconfig[name] = value
-        File.open(@file, 'w') {|f| f.write(JSON.pretty_generate(rconfig))}
+        File.open(file, 'w') {|f| f.write(JSON.pretty_generate(rconfig))}
       end
 
       def validate
@@ -861,7 +884,12 @@ STYLE_BLOCK    </style>
     ],
     "css": [
         DEFAULT_APP_CSS_FILE
-    ],
+    ]
+}
+    END
+
+    DEPLOY_TPL = <<-END
+{
     "server": "http://rally1.rallydev.com",
     "username": "you@domain.com",
     "password": "S3cr3t",
@@ -874,13 +902,19 @@ STYLE_BLOCK    </style>
      /* Add app styles here */
 }
     END
+
+    GITIGNORE_TPL = <<-END
+# Prevent committing login credentials
+deploy.json
+    END
   end
 end
 
 ## Helpers
 def get_config_from_file
   config_file = Rally::AppSdk::AppTemplateBuilder::CONFIG_FILE
-  Rally::AppSdk::AppConfig.from_config_file(config_file)
+  deploy_file = Rally::AppSdk::AppTemplateBuilder::DEPLOY_FILE
+  Rally::AppSdk::AppConfig.from_config_file(config_file, deploy_file)
 end
 
 def remove_files(files)
