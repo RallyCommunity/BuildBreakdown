@@ -108,7 +108,7 @@ module Rally
     #              [Rally > Setup > Workspace & Projects > hover project link > copy link location]
     #              eg. https://<server>/#/699319d/detail/project/699319 --> 699319 is the Project OID.
     #
-    # Security: Connection & credential info should be safely located (chmod 600) in config.json.
+    # Security: Connection & credential info should be safely located (chmod 600) in deploy.json.
     #
     # Config:
     #         deploy.json
