@@ -1,3 +1,6 @@
+AppTemplate for Rally SDK
+=========================
+
 ## Overview
 
 This Rakefile can be used to create a skeleton Rally app for use with Rally's App SDK.  You must have Ruby 1.9 and the rake gem installed.
