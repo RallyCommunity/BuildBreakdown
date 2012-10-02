@@ -367,7 +367,7 @@ module Rally
         content += "<!-- a local browser to experience the speed! (e.g. file:///path/to/#{filename}) -->\n"
         content += "<html><body>\n"
         content += "<iframe width='100%' height='100%' frameborder='0'\n"
-        content += "src='https://demo01.rallydev.com/slm/panel/html.sp?width=#{app_width_default}&panelOid=#{@panel_oid}&cpoid=#{@project_oid}&projectScopeUp=#{scope_up}&projectScopeDown=#{scope_down}&isEditable=true'></iframe>\n"
+        content += "src='#{@server}/slm/panel/html.sp?width=#{app_width_default}&panelOid=#{@panel_oid}&cpoid=#{@project_oid}&projectScopeUp=#{scope_up}&projectScopeDown=#{scope_down}&isEditable=true'></iframe>\n"
         content += "</body></html>"
         File.open(filename, "w") { |file| file.write(content) }
         puts "> Created #{filename}"
