@@ -2,11 +2,40 @@ Ext.define('CustomApp', {
     extend: 'Rally.app.App',
     componentCls: 'app',
 
+    items: [
+		{
+			itemId: 'rangeSelector',
+	        xtype: 'radiogroup',
+	        fieldLabel: 'Day Range',
+	        items: [
+	            { boxLabel: '1', name: 'rb', inputValue: 1 },
+	            { boxLabel: '7', name: 'rb', inputValue: 7, checked: true},
+	            { boxLabel: '30', name: 'rb', inputValue: 30 },
+	            { boxLabel: '90', name: 'rb', inputValue: 90 }
+	        ]
+	    },
+        {
+        	xtype: 'fieldcontainer',
+        	fieldLabel: 'Options',
+        	defaultType: 'checkboxfield',
+        	items: [
+        		{
+	 				boxLabel  : 'GroupByTime',
+	            	name      : 'groupByTimeCheckbox',
+	            	inputValue: '1',
+	            	itemId:      'optGroupByTime',
+	            }
+        	]
+        }
+    ],
+
     launch: function() {
-        this._getBuildStore();
+        this.on('afterrender', this._onAfterRender, this);
     },
 
-    _getBuildStore: function() {
+    _loadBuildStore: function() {
+    	this.setLoading(true);
+
         return Ext.create('Rally.data.WsapiDataStore', {
             model: 'Build',
             autoLoad: true,
@@ -24,38 +53,30 @@ Ext.define('CustomApp', {
     },
 
     _getFilters: function() {
-        // var build_start = Rally.util.DateTime.toIsoString( this.start_date_picker.getValue(), false);
-        // var build_end = Rally.util.DateTime.toIsoString( Rally.util.DateTime.add( this.end_date_picker.getValue(), "day", 1 ), false);
-        // var build_message = this.text_picker.getValue();
-        
-        // console.log( "start,end,message", build_start, build_end, build_message );
-        
-        // var query = Ext.create('Rally.data.QueryFilter', {
-        //     property: 'CreationDate',
-        //     operator: '>=',
-        //     value: build_start
-        // } );
-        
-        // query = query.and( Ext.create( 'Rally.data.QueryFilter', {
-        //         property: 'CreationDate',
-        //         operator: '<=',
-        //         value: build_end
-        // }) );
-        
-        // if ( build_message && build_message.trim !== "" ) {
-        //     query = query.and( Ext.create( 'Rally.data.QueryFilter', {
-        //         property: 'Number',
-        //         operator: 'contains',
-        //         value: build_message
-        //     }) );
-            
-        // }
+    	var daysAgo = this.getComponent('rangeSelector').getValue().rb,
+    		today = new Date();
+    		startDate = Rally.util.DateTime.add(today, 'day', 0 - daysAgo),
+    		startIso = Rally.util.DateTime.toIsoString(startDate, false),
+    		endIso = Rally.util.DateTime.toIsoString(today, false);
+
 
         var query = Ext.create('Rally.data.QueryFilter', {
             property: 'BuildDefinition',
             operator: '=',
             value: '/slm/webservice/1.37/builddefinition/6035424766' //PacSystems Mainline Build Definition
         } );
+        
+        query = query.and(Ext.create('Rally.data.QueryFilter', {
+            property: 'CreationDate',
+            operator: '>=',
+            value: startIso
+        } ));
+        
+        query = query.and( Ext.create( 'Rally.data.QueryFilter', {
+                property: 'CreationDate',
+                operator: '<=',
+                value: endIso
+        }) );
 
         return query;
     },
@@ -65,20 +86,31 @@ Ext.define('CustomApp', {
     		name: 'Changeset Counts',
     		data: []
     	},
-    		data = series.data;
+    		data = series.data,
+    		groupByTime = this.down('#optGroupByTime').getValue();
+
+		console.log(this.down('#optGroupByTime').getValue());
 
     	store.each(function(item) {
-    		data.push({
+    		var dataPoint = {
     			y: item.get('Changesets').length,
     			borderColor: item.get('Status') === 'SUCCESS' ? '#07C600' : '#FF0000'
-    		});
+    		};
+    		if (groupByTime) {
+    			dataPoint.x = item.get('CreationDate'); 
+    		}
+    		data.push(dataPoint);
     	});
-    	console.log('store transformed!');
 
-		this.add(this._getChartConfig(series));
+    	if (this.buildChart) {
+    		this.remove(this.buildChart);
+    	}
+
+		this.buildChart = this.add(this._getChartConfig(series, groupByTime));
+		this.setLoading(false);
     },
 
-    _getChartConfig: function(series) {
+    _getChartConfig: function(series, groupByTime) {
 	    return {
           xtype: 'rallychart',
           height: 400,
@@ -93,6 +125,7 @@ Ext.define('CustomApp', {
               },
               xAxis: [
                   {
+                  	  type: groupByTime ? 'datetime' : 'linear',
                       title: {
                           text: 'Build'
                       }
@@ -105,5 +138,21 @@ Ext.define('CustomApp', {
               }
           }
       }
-    }
+    },
+
+    _onAfterRender: function() {
+    	this._loadBuildStore();
+    	this.getComponent('rangeSelector').on('change', this._onRangeSelectorChange, this);
+    	this.down('#optGroupByTime').on('change', this._onOptionsChange, this);
+    },
+
+    _onRangeSelectorChange: function() {
+    	this._loadBuildStore();
+    },
+
+	_onOptionsChange: function(){
+		this._loadBuildStore();
+	}
+
 });
+
