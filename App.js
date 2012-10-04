@@ -16,11 +16,10 @@ Ext.define('CustomApp', {
 	    },
         {
         	xtype: 'fieldcontainer',
-        	fieldLabel: 'Options',
+        	fieldLabel: 'Group By Time',
         	defaultType: 'checkboxfield',
         	items: [
         		{
-	 				boxLabel  : 'GroupByTime',
 	            	name      : 'groupByTimeCheckbox',
 	            	inputValue: '1',
 	            	itemId:      'optGroupByTime',
@@ -39,7 +38,7 @@ Ext.define('CustomApp', {
         return Ext.create('Rally.data.WsapiDataStore', {
             model: 'Build',
             autoLoad: true,
-            fetch: true,
+            fetch: ['CreationDate', 'Number', 'Status', 'Changesets', 'Changes'],
             sorters: [{
                 property: 'CreationDate',
                 direction: 'DESC'
@@ -53,7 +52,7 @@ Ext.define('CustomApp', {
     },
 
     _getFilters: function() {
-    	var daysAgo = this.getComponent('rangeSelector').getValue().rb,
+    	var daysAgo = this.down('#rangeSelector').getValue().rb,
     		today = new Date();
     		startDate = Rally.util.DateTime.add(today, 'day', 0 - daysAgo),
     		startIso = Rally.util.DateTime.toIsoString(startDate, false),
@@ -89,18 +88,21 @@ Ext.define('CustomApp', {
     		data = series.data,
     		groupByTime = this.down('#optGroupByTime').getValue();
 
-		console.log(this.down('#optGroupByTime').getValue());
-
     	store.each(function(item) {
-    		var dataPoint = {
-    			y: item.get('Changesets').length,
-    			borderColor: item.get('Status') === 'SUCCESS' ? '#07C600' : '#FF0000'
-    		};
+    		var color = item.get('Status') === 'SUCCESS' ? '#07C600' : '#FF0000',
+    			dataPoint = {
+	    			y: item.get('Changesets').length,
+	    			color: color,
+	    			borderColor: color,
+	    			tooltip: item.get('Number') + '<br />' + item.get('CreationDate') + '<br />Changesets: ' + item.get('Changesets').length.toString() +
+	    				'<br />Total Changes: ' + this._getNumChangesForBuild(item).toString()
+	    		};
+
     		if (groupByTime) {
     			dataPoint.x = item.get('CreationDate'); 
     		}
     		data.push(dataPoint);
-    	});
+    	}, this);
 
     	if (this.buildChart) {
     		this.remove(this.buildChart);
@@ -108,6 +110,16 @@ Ext.define('CustomApp', {
 
 		this.buildChart = this.add(this._getChartConfig(series, groupByTime));
 		this.setLoading(false);
+    },
+
+    _getNumChangesForBuild: function(item) {
+
+    	var changes = 0;
+    	Ext.each(item.get('Changesets'), function(cset){
+    		changes += cset.Changes.length;
+    	});
+
+    	return changes;
     },
 
     _getChartConfig: function(series, groupByTime) {
@@ -118,6 +130,12 @@ Ext.define('CustomApp', {
               chart: {
               	type: 'column'
               },
+              tooltip: {
+              formatter: function() {
+              		return this.point.tooltip;
+              	}
+              },
+              legend: {enabled: false},
               series: [series],
               title: {
                   text: 'Build Breakdown',
@@ -128,6 +146,9 @@ Ext.define('CustomApp', {
                   	  type: groupByTime ? 'datetime' : 'linear',
                       title: {
                           text: 'Build'
+                      },
+                      labels: {
+                      	enabled: groupByTime
                       }
                   }
               ],
@@ -142,7 +163,7 @@ Ext.define('CustomApp', {
 
     _onAfterRender: function() {
     	this._loadBuildStore();
-    	this.getComponent('rangeSelector').on('change', this._onRangeSelectorChange, this);
+    	this.down('#rangeSelector').on('change', this._onRangeSelectorChange, this);
     	this.down('#optGroupByTime').on('change', this._onOptionsChange, this);
     },
 
