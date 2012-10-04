@@ -16,3 +16,6 @@ Using the Build Breakdown app in conjunction with the Build Action Board and the
 ## Configuration
 
 This app requires Rally's Changeset integration adapter for SVN, Git, or other SCM.
+
+Checkout our demo:
+http://www.screencast.com/t/M8tqxpqEr
