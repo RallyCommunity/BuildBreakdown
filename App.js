@@ -62,7 +62,7 @@ Ext.define('CustomApp', {
         var query = Ext.create('Rally.data.QueryFilter', {
             property: 'BuildDefinition',
             operator: '=',
-            value: '/slm/webservice/1.37/builddefinition/6035424766' //PacSystems Mainline Build Definition
+            value: '/builddefinition/6035424766' //PacSystems Mainline Build Definition
         } );
         
         query = query.and(Ext.create('Rally.data.QueryFilter', {
@@ -94,6 +94,7 @@ Ext.define('CustomApp', {
 	    			y: item.get('Changesets').length,
 	    			color: color,
 	    			borderColor: color,
+	    			ref: item.get('_ref'),
 	    			tooltip: item.get('Number') + '<br />' + item.get('CreationDate') + '<br />Changesets: ' + item.get('Changesets').length.toString() +
 	    				'<br />Total Changes: ' + this._getNumChangesForBuild(item).toString()
 	    		};
@@ -156,6 +157,18 @@ Ext.define('CustomApp', {
                   title: {
                       text: 'Changesets'
                   }
+              },
+              plotOptions: {
+              	series: {
+                  cursor: 'pointer',
+                  	point: {
+                        events: {
+                            click: function() {
+                                Rally.environment.getMessageBus().publish('buildSelected', this.ref);
+                            }
+                        }
+                    }
+                }
               }
           }
       }
