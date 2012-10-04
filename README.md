@@ -1,25 +1,18 @@
-AppTemplate for Rally SDK
+Build Breakdown
 =========================
 
 ## Overview
 
-This Rakefile can be used to create a skeleton Rally app for use with Rally's App SDK.  You must have Ruby 1.9 and the rake gem installed.
+Build Breakdown is a Rally App for displaying information about build status.
 
-The normal workflow for creating an App is to start by creating an App with the new task.
+## Features
 
-Available tasks are:
+Build Breakdown shows builds belonging to a specific build definition. Builds are colored coded by success/failure and their magnitude is toggleable to represent either the number of changesets in each build or the duration of the build. Builds are ordered by date can be optionally shown accross a time line axis to show when builds were run. Hovering over each build displays information about the build. Clicking on a build causes integrated apps (Build Action Board https://github.com/skandl/BuildActionBoard) and (CI Build Report https://github.com/EddieGotherman/build-dashboard) to display information related to the selected build.
 
-    rake new[app_name,sdk_version,server]   # Create an app with the provided name (and optional SDK version and rally server [default: https://rally1.rallydev.com])
-    rake debug                              # Build a debug version of the app, useful for local development. 
-    rake build                              # Build a deployable app which includes all JavaScript and CSS resources inline. Use after you app is working as you intend so that it can be copied into Rally.
-    rake clean                              # Clean all generated output
-    rake jslint                             # Run jslint on all JavaScript files used by this app
-    rake deploy                             # Deploy the app to a Rally server
-    rake deploy:debug                       # Deploy the debug app to a Rally server
-    rake deploy:info                        # Display deployment information
-    
-You can find more information on installing Ruby and using rake tasks to simplify app development here: https://rally1.rallydev.com/apps/2.0p3/doc/#!/guide/appsdk_20_starter_kit
+## Benefits
 
-## License
+Using the Build Breakdown app in conjunction with the Build Action Board and the CI Build Report creates a dashboard to quickly identify build status and pinpoint failure points.
 
-AppTemplate is released under the MIT license.  See the file [LICENSE](https://raw.github.com/RallyApps/AppTemplate/master/LICENSE) for the full text.
+## Configuration
+
+This app requires Rally's Changeset integration adapter for SVN, Git, or other SCM.
