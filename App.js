@@ -250,7 +250,12 @@ Ext.define('CustomApp', {
     	this.down('#rangeSelector').on('changecomplete', this._loadBuildStore, this);
     	this.down('#optGroupByTime').on('change', this._loadBuildStore, this);
     	this.down('#buildDurationCheckbox').on('change', this._loadBuildStore, this);
-    	this.down('#buildDefinitionSelector').on('change', this._loadBuildStore, this);    	
+    	this.down('#buildDefinitionSelector').on('change', this._loadBuildStore, this);
+    	Rally.environment.getMessageBus().subscribe('daysSinceBuild', function(elapsed_days) {
+    			console.log("Days ago from build action board: ", elapsed_days);
+    			this.down('#rangeSelector').setValue(elapsed_days);
+    			this._loadBuildStore();
+    		}, this);    	
     }
 
 });
