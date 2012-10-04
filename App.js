@@ -3,29 +3,94 @@ Ext.define('CustomApp', {
     componentCls: 'app',
 
     items: [
-		{
-			itemId: 'rangeSelector',
-	        xtype: 'radiogroup',
-	        fieldLabel: 'Day Range',
-	        items: [
-	            { boxLabel: '1', name: 'rb', inputValue: 1 },
-	            { boxLabel: '7', name: 'rb', inputValue: 7, checked: true},
-	            { boxLabel: '30', name: 'rb', inputValue: 30 },
-	            { boxLabel: '90', name: 'rb', inputValue: 90 }
-	        ]
-	    },
-        {
-        	xtype: 'fieldcontainer',
-        	fieldLabel: 'Group By Time',
-        	defaultType: 'checkboxfield',
-        	items: [
-        		{
-	            	name      : 'groupByTimeCheckbox',
-	            	inputValue: '1',
-	            	itemId:      'optGroupByTime',
-	            }
-        	]
-        }
+    	{
+    		xtype: 'container',
+    		layout: 'hbox',
+    		items: [
+			   //  {
+			   //  	xtype: 'combobox',
+			   //  	fieldLabel: 'Day Range',
+			   //  	itemId: 'rangeSelector',
+			   //  	displayField: 'label',
+			   //  	valueField: 'value',
+			   //  	value: 7,
+			   //  	width: 400,
+			   //  	store: Ext.create('Ext.data.Store', {
+			   //  		fields: ['label', 'value'],
+			   //  		data: [{
+			   //  			label: '1 Day',
+			   //  			value: 1
+			   //  		},
+			   //  		{
+			   //  			label: '7 Days',
+			   //  			value: 7
+			   //  		},
+						// {
+			   //  			label: '30 Days',
+			   //  			value: 30
+			   //  		},
+			   //  		{
+			   //  			label: '90 Days',
+			   //  			value: 90
+			   //  		}]
+			   //  	}),
+			   //  	style: {marginRight: '6px'}
+			   //  },
+			   	{
+			    	xtype: 'rallyslider',
+			    	fieldLabel: 'Day Range',
+			    	itemId: 'rangeSelector',
+			    	value: 7,
+			    	width: 400,
+			    	increment: 1,
+			    	minValue: 1,
+			    	maxValue: 180,
+			    	style: {marginRight: '6px'}
+			    },
+			    {
+		        	xtype: 'fieldcontainer',
+		        	fieldLabel: 'Group By Time',
+		        	defaultType: 'checkboxfield',
+		        	items: [
+		        		{
+			            	name      : 'groupByTimeCheckbox',
+			            	inputValue: '1',
+			            	itemId:      'optGroupByTime',
+			            }
+		        	],
+		        	
+		        }
+    		]
+    	},
+    	{
+    		xtype: 'container',
+    		layout: 'hbox',
+    		items: [
+			    {
+			    	xtype: 'rallycombobox',
+			    	fieldLabel: 'Build Definition',
+			    	itemId: 'buildDefinitionSelector',
+			    	width: 400,
+			    	storeConfig: {
+			    		autoLoad: true,
+			    		model: 'BuildDefinition'
+			    	},
+			    	style: {marginRight: '6px'}
+			    },
+		        {
+		        	xtype: 'fieldcontainer',
+		        	fieldLabel: 'Build Duration',
+		        	defaultType: 'checkboxfield',
+		        	items: [
+		        		{
+			            	name      : 'buildDurationCheckbox',
+			            	inputValue: '1',
+			            	itemId:      'buildDurationCheckbox',
+			            }
+		        	]
+		        }
+    		]
+    	}
     ],
 
     launch: function() {
@@ -38,7 +103,8 @@ Ext.define('CustomApp', {
         return Ext.create('Rally.data.WsapiDataStore', {
             model: 'Build',
             autoLoad: true,
-            fetch: ['CreationDate', 'Number', 'Status', 'Changesets', 'Changes'],
+            fetch: ['CreationDate', 'Number', 'Status', 'Changesets', 'Changes', 'Duration'],
+            limit: Infinity,
             sorters: [{
                 property: 'CreationDate',
                 direction: 'DESC'
@@ -52,17 +118,16 @@ Ext.define('CustomApp', {
     },
 
     _getFilters: function() {
-    	var daysAgo = this.down('#rangeSelector').getValue().rb,
+    	var daysAgo = this.down('#rangeSelector').getValue(),
     		today = new Date();
     		startDate = Rally.util.DateTime.add(today, 'day', 0 - daysAgo),
     		startIso = Rally.util.DateTime.toIsoString(startDate, false),
     		endIso = Rally.util.DateTime.toIsoString(today, false);
 
-
         var query = Ext.create('Rally.data.QueryFilter', {
             property: 'BuildDefinition',
             operator: '=',
-            value: '/builddefinition/6035424766' //PacSystems Mainline Build Definition
+            value: this.down('#buildDefinitionSelector').getValue()
         } );
         
         query = query.and(Ext.create('Rally.data.QueryFilter', {
@@ -86,17 +151,19 @@ Ext.define('CustomApp', {
     		data: []
     	},
     		data = series.data,
-    		groupByTime = this.down('#optGroupByTime').getValue();
+    		groupByTime = this.down('#optGroupByTime').getValue(),
+    		showDuration = this.down('#buildDurationCheckbox').getValue();
 
     	store.each(function(item) {
     		var color = item.get('Status') === 'SUCCESS' ? '#07C600' : '#FF0000',
     			dataPoint = {
-	    			y: item.get('Changesets').length,
+	    			y: showDuration ? item.get('Duration') : item.get('Changesets').length,
 	    			color: color,
 	    			borderColor: color,
 	    			ref: item.get('_ref'),
 	    			tooltip: item.get('Number') + '<br />' + item.get('CreationDate') + '<br />Changesets: ' + item.get('Changesets').length.toString() +
-	    				'<br />Total Changes: ' + this._getNumChangesForBuild(item).toString()
+	    				'<br />Total Changes: ' + this._getNumChangesForBuild(item).toString() +
+	    				'<br />Build Duration: ' + item.get('Duration') + " minutes"
 	    		};
 
     		if (groupByTime) {
@@ -109,7 +176,7 @@ Ext.define('CustomApp', {
     		this.remove(this.buildChart);
     	}
 
-		this.buildChart = this.add(this._getChartConfig(series, groupByTime));
+		this.buildChart = this.add(this._getChartConfig(series, groupByTime, showDuration));
 		this.setLoading(false);
     },
 
@@ -123,7 +190,7 @@ Ext.define('CustomApp', {
     	return changes;
     },
 
-    _getChartConfig: function(series, groupByTime) {
+    _getChartConfig: function(series, groupByTime, showDuration) {
 	    return {
           xtype: 'rallychart',
           height: 400,
@@ -155,7 +222,7 @@ Ext.define('CustomApp', {
               ],
               yAxis: {
                   title: {
-                      text: 'Changesets'
+                      text: showDuration ? 'Build Time (min)' : '# of Changesets'
                   }
               },
               plotOptions: {
@@ -175,18 +242,16 @@ Ext.define('CustomApp', {
     },
 
     _onAfterRender: function() {
-    	this._loadBuildStore();
-    	this.down('#rangeSelector').on('change', this._onRangeSelectorChange, this);
-    	this.down('#optGroupByTime').on('change', this._onOptionsChange, this);
-    },
+    	this.down('#buildDefinitionSelector').getStore().on('load', this._onBuildDefinitionLoad, this);
+   	},
 
-    _onRangeSelectorChange: function() {
+   	_onBuildDefinitionLoad: function() {
     	this._loadBuildStore();
-    },
-
-	_onOptionsChange: function(){
-		this._loadBuildStore();
-	}
+    	this.down('#rangeSelector').on('changecomplete', this._loadBuildStore, this);
+    	this.down('#optGroupByTime').on('change', this._loadBuildStore, this);
+    	this.down('#buildDurationCheckbox').on('change', this._loadBuildStore, this);
+    	this.down('#buildDefinitionSelector').on('change', this._loadBuildStore, this);    	
+    }
 
 });
 
